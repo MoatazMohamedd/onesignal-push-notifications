@@ -1,0 +1,6 @@
+# Core HTTP client
+requests>=2.31.0
+
+# Firestore — accessed directly, no Firebase Admin SDK needed
+google-cloud-firestore>=2.14.0
+google-auth>=2.23.0
