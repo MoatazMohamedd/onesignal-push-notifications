@@ -305,7 +305,7 @@ def is_expiring_today(expiry_date: str) -> bool:
 def get_firestore_games() -> list[dict]:
     """Read the current game list from Firestore."""
     try:
-        doc = firestore_client.collection("all_freebies").document("games").get()
+        doc = firestore_client.collection("test").document("games").get()
         if doc.exists:
             return (doc.to_dict() or {}).get("games", [])
         return []
@@ -317,7 +317,7 @@ def get_firestore_games() -> list[dict]:
 def update_firestore_games(games: list[dict]) -> None:
     """Persist the updated game list to Firestore."""
     try:
-        firestore_client.collection("all_freebies").document("games").set(
+        firestore_client.collection("test").document("games").set(
             {"games": games}
         )
         logger.info("✅ Saved %d games to Firestore", len(games))
