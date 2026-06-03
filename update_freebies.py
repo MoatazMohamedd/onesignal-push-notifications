@@ -47,7 +47,7 @@ FIRESTORE_PROJECT_ID = os.getenv("FIRESTORE_PROJECT_ID")
 # Manual games (prepended to the Firestore array)
 # ---------------------------------------------------------------------------
 MANUAL_GAMES: list[dict] = [
-    [
+    
   {
     "id": 134709,
     "name": "Grand Theft Auto V",
@@ -142,7 +142,6 @@ MANUAL_GAMES: list[dict] = [
       "https://www.gog.com/game/control_ultimate_edition"
     ]
   }
-]
 ]
 
 # ---------------------------------------------------------------------------
