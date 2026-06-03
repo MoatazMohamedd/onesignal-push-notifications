@@ -57,6 +57,7 @@ MANUAL_GAMES: list[dict] = [
     "summary": "A new generation of Grand Theft Auto V featuring technical improvements and visual upgrades.",
     "game_modes": ["Single player", "Multiplayer", "Co-operative"],
     "genres": ["Shooter", "Racing", "Adventure"],
+    "worth":"59.99",
     "game_engines": ["RAGE"],
     "player_perspectives": ["First person", "Third person"],
     "screenshots": [
@@ -81,6 +82,7 @@ MANUAL_GAMES: list[dict] = [
     "genres": ["Shooter", "RPG", "Adventure"],
     "game_engines": ["Decima"],
     "player_perspectives": ["Third person"],
+    "worth":"29.99",
     "screenshots": [
       "https://images.igdb.com/igdb/image/upload/t_screenshot_med/scb0hq.jpg",
       "https://images.igdb.com/igdb/image/upload/t_screenshot_med/scb0hp.jpg",
@@ -105,6 +107,7 @@ MANUAL_GAMES: list[dict] = [
     "genres": ["Shooter", "RPG", "Adventure"],
     "game_engines": ["Dawn Engine"],
     "player_perspectives": ["First person", "Third person"],
+    "worth":"29.99",
     "screenshots": [
       "https://images.igdb.com/igdb/image/upload/t_screenshot_med/scahe8.jpg",
       "https://images.igdb.com/igdb/image/upload/t_screenshot_med/scahec.jpg",
@@ -129,6 +132,7 @@ MANUAL_GAMES: list[dict] = [
     "genres": ["Shooter", "Adventure"],
     "game_engines": ["Northlight Engine"],
     "player_perspectives": ["Third person"],
+    "worth":"19.99",
     "screenshots": [
       "https://images.igdb.com/igdb/image/upload/t_screenshot_med/sc8qxw.jpg",
       "https://images.igdb.com/igdb/image/upload/t_screenshot_med/sc8qxx.jpg",
