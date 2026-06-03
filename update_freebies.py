@@ -386,7 +386,8 @@ def main() -> None:
     firestore_map = {g["gamerpower_id"]: g for g in firestore_games}
     enriched_games: list[dict] = []
 
-    for gp_game in gp_games:
+    test_games = ["Grand Theft Auto V","Death Stranding: Director's Cut", "Marvel's Guardians of the Galaxy","Control: Ultimate Edition"]
+    for gp_game in test_games:
         gp_id = gp_game["gamerpower_id"]
         is_new = gp_id in added_ids
 
@@ -396,7 +397,7 @@ def main() -> None:
             and firestore_map.get(gp_id, {}).get("name")
         )
 
-        if should_enrich:
+        if True:
             logger.info("🔎 Enriching: %s", gp_game["title"])
             igdb_data = fetch_igdb_data(
                 gp_game["title"], normalize_title(gp_game["title"]), gp_game
