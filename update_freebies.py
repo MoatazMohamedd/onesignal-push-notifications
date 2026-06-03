@@ -388,14 +388,14 @@ def main() -> None:
 
     test_games = ["Grand Theft Auto V","Death Stranding: Director's Cut", "Marvel's Guardians of the Galaxy","Control: Ultimate Edition"]
     for gp_game in test_games:
-        gp_id = gp_game["gamerpower_id"]
-        is_new = gp_id in added_ids
+        # gp_id = gp_game["gamerpower_id"]
+        # is_new = gp_id in added_ids
 
-        # Enrich when new, or when existing entry is missing IGDB data.
-        should_enrich = is_new or not (
-            firestore_map.get(gp_id, {}).get("id")
-            and firestore_map.get(gp_id, {}).get("name")
-        )
+        # # Enrich when new, or when existing entry is missing IGDB data.
+        # should_enrich = is_new or not (
+        #     firestore_map.get(gp_id, {}).get("id")
+        #     and firestore_map.get(gp_id, {}).get("name")
+        # )
 
         if True:
             logger.info("🔎 Enriching: %s", gp_game["title"])
