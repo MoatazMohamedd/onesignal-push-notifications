@@ -386,7 +386,12 @@ def main() -> None:
     firestore_map = {g["gamerpower_id"]: g for g in firestore_games}
     enriched_games: list[dict] = []
 
-    test_games = ["Grand Theft Auto V","Death Stranding: Director's Cut", "Marvel's Guardians of the Galaxy","Control: Ultimate Edition"]
+    test_games = [
+        {"title": "Grand Theft Auto V"},
+        {"title": "Death Stranding: Director's Cut"},
+        {"title": "Marvel's Guardians of the Galaxy"},
+        {"title": "Control: Ultimate Edition"}
+    ]
     for gp_game in test_games:
         # gp_id = gp_game["gamerpower_id"]
         # is_new = gp_id in added_ids
@@ -407,23 +412,23 @@ def main() -> None:
                 logger.warning("⚠️  Skipped %s (no IGDB match)", gp_game["title"])
                 continue
 
-            merged = merge_game_data(gp_game, igdb_data)
+           # merged = merge_game_data(gp_game, igdb_data)
 
-            if gp_id in firestore_map:
-                existing = firestore_map[gp_id]
-                final: dict = {}
-                for key, value in merged.items():
-                    if key in ("expiry_date", "worth", "store", "open_giveaway_url"):
-                        final[key] = value
-                    elif existing.get(key) not in (None, "", [], {}):
-                        final[key] = existing[key]
-                    else:
-                        final[key] = value
-                enriched_games.append(final)
-            else:
-                enriched_games.append(merged)
+            # if gp_id in firestore_map:
+            #     existing = firestore_map[gp_id]
+            #     final: dict = {}
+            #     for key, value in merged.items():
+            #         if key in ("expiry_date", "worth", "store", "open_giveaway_url"):
+            #             final[key] = value
+            #         elif existing.get(key) not in (None, "", [], {}):
+            #             final[key] = existing[key]
+            #         else:
+            #             final[key] = value
+            #     enriched_games.append(final)
+            # else:
+            #     enriched_games.append(merged)
 
-            if is_new:
+            if True:
                 notify_new_game(merged)
 
         else:
