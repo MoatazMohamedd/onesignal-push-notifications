@@ -219,11 +219,13 @@ def detect_store(offer: dict) -> str:
     store_signals = [
         ("Steam",           ["steam"]),
         ("Epic Games Store",["epic"]),
-        ("GoG",             ["gog"]),
+        ("GOG",             ["gog"]),
         ("Origin",          ["origin"]),
         ("IndieGala",       ["indiegala"]),
         ("STOVE",           ["stove"]),
         ("Itch.io",         ["itch"]),
+        ("Rift",            ["rift"]),
+        ("Epic Games Mobile", ["mobile"]),
         ("DRM-Free",        ["drm-free"]),
     ]
     for store_name, signals in store_signals:
@@ -412,7 +414,7 @@ def is_expiring_today(expiry_date: str) -> bool:
 def get_firestore_games() -> list[dict]:
     """Read the current game list from Firestore."""
     try:
-        doc = firestore_client.collection("test").document("games").get()
+        doc = firestore_client.collection("all_freebies").document("games").get()
         if doc.exists:
             return (doc.to_dict() or {}).get("games", [])
         return []
@@ -424,7 +426,7 @@ def get_firestore_games() -> list[dict]:
 def update_firestore_games(games: list[dict]) -> None:
     """Persist the updated game list to Firestore."""
     try:
-        firestore_client.collection("test").document("games").set(
+        firestore_client.collection("all_freebies").document("games").set(
             {"games": games}
         )
         logger.info("✅ Saved %d games to Firestore", len(games))
