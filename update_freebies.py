@@ -48,111 +48,111 @@ FIRESTORE_PROJECT_ID = os.getenv("FIRESTORE_PROJECT_ID")
 # ---------------------------------------------------------------------------
 MANUAL_GAMES: list[dict] = [
     
-  {
-    "id": 134709,
-    "name": "Grand Theft Auto V",
-    "cover_url": "https://images.igdb.com/igdb/image/upload/t_cover_big/co66nd.jpg",
-    "first_release_date": 1649721600,
-    "total_rating": 99.71324894063139,
-    "summary": "A new generation of Grand Theft Auto V featuring technical improvements and visual upgrades.",
-    "game_modes": ["Single player", "Multiplayer", "Co-operative"],
-    "genres": ["Shooter", "Racing", "Adventure"],
-    "worth":"59.99",
-        "store":"Epic Games Store",
+#   {
+#     "id": 134709,
+#     "name": "Grand Theft Auto V",
+#     "cover_url": "https://images.igdb.com/igdb/image/upload/t_cover_big/co66nd.jpg",
+#     "first_release_date": 1649721600,
+#     "total_rating": 99.71324894063139,
+#     "summary": "A new generation of Grand Theft Auto V featuring technical improvements and visual upgrades.",
+#     "game_modes": ["Single player", "Multiplayer", "Co-operative"],
+#     "genres": ["Shooter", "Racing", "Adventure"],
+#     "worth":"59.99",
+#         "store":"Epic Games Store",
 
-    "game_engines": ["RAGE"],
-    "player_perspectives": ["First person", "Third person"],
-    "screenshots": [
-      "https://images.igdb.com/igdb/image/upload/t_screenshot_med/scgp6j.jpg",
-      "https://images.igdb.com/igdb/image/upload/t_screenshot_med/scgp6i.jpg",
-      "https://images.igdb.com/igdb/image/upload/t_screenshot_med/scgqde.jpg"
-    ],
-    "websites": [
-      "https://www.xbox.com/en-us/games/store/grand-theft-auto-v-xbox-one-&-xbox-series-x|s/9P8RQH67TTT1",
-      "https://store.playstation.com/en-us/product/UP1004-PPSA03420_00-GTAOANDSPUPGRADE",
-      "https://www.rockstargames.com/"
-    ]
-  },
-  {
-    "id": 152063,
-    "name": "Death Stranding: Director's Cut",
-    "cover_url": "https://images.igdb.com/igdb/image/upload/t_cover_big/cobksg.jpg",
-    "first_release_date": 1632441600,
-    "total_rating": 89.57747481869417,
-    "summary": "Sam Bridges must brave a fractured world and reconnect humanity.",
-    "game_modes": ["Single player"],
-    "genres": ["Shooter", "RPG", "Adventure"],
-    "game_engines": ["Decima"],
-    "player_perspectives": ["Third person"],
-    "worth":"29.99",
-        "store":"Epic Games Store",
+#     "game_engines": ["RAGE"],
+#     "player_perspectives": ["First person", "Third person"],
+#     "screenshots": [
+#       "https://images.igdb.com/igdb/image/upload/t_screenshot_med/scgp6j.jpg",
+#       "https://images.igdb.com/igdb/image/upload/t_screenshot_med/scgp6i.jpg",
+#       "https://images.igdb.com/igdb/image/upload/t_screenshot_med/scgqde.jpg"
+#     ],
+#     "websites": [
+#       "https://www.xbox.com/en-us/games/store/grand-theft-auto-v-xbox-one-&-xbox-series-x|s/9P8RQH67TTT1",
+#       "https://store.playstation.com/en-us/product/UP1004-PPSA03420_00-GTAOANDSPUPGRADE",
+#       "https://www.rockstargames.com/"
+#     ]
+#   },
+#   {
+#     "id": 152063,
+#     "name": "Death Stranding: Director's Cut",
+#     "cover_url": "https://images.igdb.com/igdb/image/upload/t_cover_big/cobksg.jpg",
+#     "first_release_date": 1632441600,
+#     "total_rating": 89.57747481869417,
+#     "summary": "Sam Bridges must brave a fractured world and reconnect humanity.",
+#     "game_modes": ["Single player"],
+#     "genres": ["Shooter", "RPG", "Adventure"],
+#     "game_engines": ["Decima"],
+#     "player_perspectives": ["Third person"],
+#     "worth":"29.99",
+#         "store":"Epic Games Store",
 
-    "screenshots": [
-      "https://images.igdb.com/igdb/image/upload/t_screenshot_med/scb0hq.jpg",
-      "https://images.igdb.com/igdb/image/upload/t_screenshot_med/scb0hp.jpg",
-      "https://images.igdb.com/igdb/image/upload/t_screenshot_med/scb0hr.jpg",
-      "https://images.igdb.com/igdb/image/upload/t_screenshot_med/scb0hs.jpg",
-      "https://images.igdb.com/igdb/image/upload/t_screenshot_med/scb0ht.jpg"
-    ],
-    "websites": [
-      "https://store.steampowered.com/app/1850570",
-      "https://www.playstation.com/en-us/product/UP9000-PPSA01969_00-DEATHSTRANDINGUS",
-      "https://www.epicgames.com/store/p/death-stranding-directors-cut"
-    ]
-  },
-  {
-    "id": 152249,
-    "name": "Marvel's Guardians of the Galaxy",
-    "cover_url": "https://images.igdb.com/igdb/image/upload/t_cover_big/co39pu.jpg",
-    "first_release_date": 1635206400,
-    "total_rating": 81.33941977310037,
-    "summary": "Fire up a wild ride across the cosmos as Star-Lord leading the Guardians.",
-    "game_modes": ["Single player"],
-    "genres": ["Shooter", "RPG", "Adventure"],
-    "game_engines": ["Dawn Engine"],
-    "player_perspectives": ["First person", "Third person"],
-    "worth":"29.99",
-        "store":"Epic Games Store",
+#     "screenshots": [
+#       "https://images.igdb.com/igdb/image/upload/t_screenshot_med/scb0hq.jpg",
+#       "https://images.igdb.com/igdb/image/upload/t_screenshot_med/scb0hp.jpg",
+#       "https://images.igdb.com/igdb/image/upload/t_screenshot_med/scb0hr.jpg",
+#       "https://images.igdb.com/igdb/image/upload/t_screenshot_med/scb0hs.jpg",
+#       "https://images.igdb.com/igdb/image/upload/t_screenshot_med/scb0ht.jpg"
+#     ],
+#     "websites": [
+#       "https://store.steampowered.com/app/1850570",
+#       "https://www.playstation.com/en-us/product/UP9000-PPSA01969_00-DEATHSTRANDINGUS",
+#       "https://www.epicgames.com/store/p/death-stranding-directors-cut"
+#     ]
+#   },
+#   {
+#     "id": 152249,
+#     "name": "Marvel's Guardians of the Galaxy",
+#     "cover_url": "https://images.igdb.com/igdb/image/upload/t_cover_big/co39pu.jpg",
+#     "first_release_date": 1635206400,
+#     "total_rating": 81.33941977310037,
+#     "summary": "Fire up a wild ride across the cosmos as Star-Lord leading the Guardians.",
+#     "game_modes": ["Single player"],
+#     "genres": ["Shooter", "RPG", "Adventure"],
+#     "game_engines": ["Dawn Engine"],
+#     "player_perspectives": ["First person", "Third person"],
+#     "worth":"29.99",
+#         "store":"Epic Games Store",
 
-    "screenshots": [
-      "https://images.igdb.com/igdb/image/upload/t_screenshot_med/scahe8.jpg",
-      "https://images.igdb.com/igdb/image/upload/t_screenshot_med/scahec.jpg",
-      "https://images.igdb.com/igdb/image/upload/t_screenshot_med/scaheb.jpg",
-      "https://images.igdb.com/igdb/image/upload/t_screenshot_med/scahea.jpg",
-      "https://images.igdb.com/igdb/image/upload/t_screenshot_med/scahe9.jpg"
-    ],
-    "websites": [
-      "https://store.steampowered.com/app/1088850",
-      "https://www.epicgames.com/p/marvels-guardians-of-the-galaxy",
-      "https://guardiansofthegalaxy.square-enix-games.com/"
-    ]
-  },
-  {
-    "id": 136604,
-    "name": "Control: Ultimate Edition",
-    "cover_url": "https://images.igdb.com/igdb/image/upload/t_cover_big/co2ewb.jpg",
-    "first_release_date": 1598486400,
-    "total_rating": 88.78145259538431,
-    "summary": "A third-person action-adventure set inside a mysterious shifting building known as the Oldest House.",
-    "game_modes": ["Single player"],
-    "genres": ["Shooter", "Adventure"],
-    "game_engines": ["Northlight Engine"],
-    "player_perspectives": ["Third person"],
-    "store":"Epic Games Store",
-    "worth":"19.99",
-    "screenshots": [
-      "https://images.igdb.com/igdb/image/upload/t_screenshot_med/sc8qxw.jpg",
-      "https://images.igdb.com/igdb/image/upload/t_screenshot_med/sc8qxx.jpg",
-      "https://images.igdb.com/igdb/image/upload/t_screenshot_med/sc8qxy.jpg",
-      "https://images.igdb.com/igdb/image/upload/t_screenshot_med/sc8qxz.jpg",
-      "https://images.igdb.com/igdb/image/upload/t_screenshot_med/sc8qy0.jpg"
-    ],
-    "websites": [
-      "https://store.steampowered.com/app/870780",
-      "https://www.epicgames.com/store/p/control--ultimate-edition",
-      "https://www.gog.com/game/control_ultimate_edition"
-    ]
-  }
+#     "screenshots": [
+#       "https://images.igdb.com/igdb/image/upload/t_screenshot_med/scahe8.jpg",
+#       "https://images.igdb.com/igdb/image/upload/t_screenshot_med/scahec.jpg",
+#       "https://images.igdb.com/igdb/image/upload/t_screenshot_med/scaheb.jpg",
+#       "https://images.igdb.com/igdb/image/upload/t_screenshot_med/scahea.jpg",
+#       "https://images.igdb.com/igdb/image/upload/t_screenshot_med/scahe9.jpg"
+#     ],
+#     "websites": [
+#       "https://store.steampowered.com/app/1088850",
+#       "https://www.epicgames.com/p/marvels-guardians-of-the-galaxy",
+#       "https://guardiansofthegalaxy.square-enix-games.com/"
+#     ]
+#   },
+#   {
+#     "id": 136604,
+#     "name": "Control: Ultimate Edition",
+#     "cover_url": "https://images.igdb.com/igdb/image/upload/t_cover_big/co2ewb.jpg",
+#     "first_release_date": 1598486400,
+#     "total_rating": 88.78145259538431,
+#     "summary": "A third-person action-adventure set inside a mysterious shifting building known as the Oldest House.",
+#     "game_modes": ["Single player"],
+#     "genres": ["Shooter", "Adventure"],
+#     "game_engines": ["Northlight Engine"],
+#     "player_perspectives": ["Third person"],
+#     "store":"Epic Games Store",
+#     "worth":"19.99",
+#     "screenshots": [
+#       "https://images.igdb.com/igdb/image/upload/t_screenshot_med/sc8qxw.jpg",
+#       "https://images.igdb.com/igdb/image/upload/t_screenshot_med/sc8qxx.jpg",
+#       "https://images.igdb.com/igdb/image/upload/t_screenshot_med/sc8qxy.jpg",
+#       "https://images.igdb.com/igdb/image/upload/t_screenshot_med/sc8qxz.jpg",
+#       "https://images.igdb.com/igdb/image/upload/t_screenshot_med/sc8qy0.jpg"
+#     ],
+#     "websites": [
+#       "https://store.steampowered.com/app/870780",
+#       "https://www.epicgames.com/store/p/control--ultimate-edition",
+#       "https://www.gog.com/game/control_ultimate_edition"
+#     ]
+#   }
 ]
 
 # ---------------------------------------------------------------------------
