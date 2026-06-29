@@ -399,13 +399,21 @@ def _transform_igdb(raw: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 def is_expiring_today(expiry_date: str) -> bool:
-    """Return True if expiry_date falls on today's UTC date."""
+    """Return True if expiry_date falls on today's UTC date OR is already past."""
     try:
         exp = datetime.fromisoformat(expiry_date.replace("Z", "+00:00"))
+
+        # If still naive after parsing, assume UTC
+        if exp.tzinfo is None:
+            exp = exp.replace(tzinfo=timezone.utc)
+
     except ValueError:
         return False
-    return exp.date() == datetime.now(timezone.utc).date()
 
+    now_utc = datetime.now(timezone.utc)
+
+    # Catch games expiring today AND games whose reminder was missed on a prior day
+    return exp.date() <= now_utc.date()
 
 # ---------------------------------------------------------------------------
 # Firestore persistence
