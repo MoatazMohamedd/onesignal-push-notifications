@@ -484,7 +484,7 @@ def main() -> None:
 
     if not added_ids and not removed_ids:
         logger.info("✨ No changes detected. Everything is up to date!")
-        return
+        
 
     logger.info(
         "📊 Changes — added: %d, removed: %d",
