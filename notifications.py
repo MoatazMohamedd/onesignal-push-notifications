@@ -70,6 +70,8 @@ def send_notification(
         # All other locales fall back to 'en'.
         "headings": {"en": heading_en, "ar": heading_ar},
         "contents": {"en": content_en, "ar": content_ar},
+        "ttl": 2419200,
+
     }
 
     if data:
@@ -150,10 +152,10 @@ def notify_new_game(game: dict) -> None:
 
     try:
         send_notification(
-            heading_en=f"{name} Just Turned FREE!",
-            heading_ar=f"أصبحت لعبة {name} مجانية الآن!",
-            content_en=f"Claim it on {store} fast — normally ${worth}. Don't miss out!",
-            content_ar=f"احصل عليها الآن على {store} — قيمتها ${worth}. لا تفوّت الفرصة!",
+            heading_en=f"FREE {name}",
+            heading_ar=f"{name} مجانًا",
+            content_en=f"Save ${worth}. Thousands are claiming it on {store} — get it now!",
+            content_ar=f"وفر ${worth}. آلاف الأشخاص يحصلون عليه على {store} — احصل عليه الآن!",
             data={
                 "game_name": name,
                 "worth": worth,
@@ -179,15 +181,13 @@ def notify_expiry_reminder(game: dict) -> None:
 
     try:
         send_notification(
-            heading_en=f"⏰ Last Chance for {name}!",
-            heading_ar=f"⏰ فرصتك الأخيرة للحصول على {name}!",
+            heading_en=f"Don't Miss {name}",
+            heading_ar=f"لا تفوّت {name}",
             content_en=(
-                f"The free offer on {store} ends TODAY. "
-                "Claim it now before it's gone forever!"
+              f"Today is your LAST chance to claim this ${worth} game for FREE on {store}!"
             ),
             content_ar=(
-                f"العرض المجاني على {store} ينتهي اليوم. "
-                "احصل عليه الآن قبل فوات الأوان!"
+             f"اليوم آخر فرصة للحصول على اللعبة مجانًا من {store}!"
             ),
             data={
                 "game_name": name,
