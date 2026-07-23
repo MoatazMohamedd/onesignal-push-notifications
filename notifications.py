@@ -178,6 +178,7 @@ def notify_expiry_reminder(game: dict) -> None:
     """
     name = game.get("name") or game.get("title", "Unknown")
     store = game.get("store", "the store")
+    worth = game.get("worth", "0.00")
 
     try:
         send_notification(
@@ -191,6 +192,7 @@ def notify_expiry_reminder(game: dict) -> None:
             ),
             data={
                 "game_name": name,
+                "worth": worth,
                 "store": store,
                 "expiry_date": game.get("expiry_date", ""),
                 "click_action": "OPEN_GAME_PAGE",
