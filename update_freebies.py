@@ -20,7 +20,10 @@ from google.cloud import firestore
 from google.oauth2 import service_account
 
 from notifications import notify_expiry_reminder, notify_new_game
+from dotenv import load_dotenv
 
+
+load_dotenv()  # Load env vars from .env file if present
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
@@ -158,9 +161,11 @@ MANUAL_GAMES: list[dict] = [
 # ---------------------------------------------------------------------------
 # Firestore client (no firebase_admin required)
 # ---------------------------------------------------------------------------
-_firebase_cred_dict: dict = json.loads(FIREBASE_CREDENTIALS_JSON)  # type: ignore[arg-type]
+with open(FIREBASE_CREDENTIALS_JSON, "r", encoding="utf-8") as f:
+    _firebase_cred_dict: dict = json.load(f)
+
 _credentials = service_account.Credentials.from_service_account_info(
-    _firebase_cred_dict
+_firebase_cred_dict
 )
 firestore_client = firestore.Client(
     project=FIRESTORE_PROJECT_ID, credentials=_credentials
