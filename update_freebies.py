@@ -413,8 +413,7 @@ def is_expiring_today(expiry_date: str) -> bool:
     now_utc = datetime.now(timezone.utc)
 
     # Catch games expiring today AND games whose reminder was missed on a prior day
-    return exp.date() <= now_utc.date()
-
+    return exp.date() == now_utc.date()
 # ---------------------------------------------------------------------------
 # Firestore persistence
 # ---------------------------------------------------------------------------
@@ -535,6 +534,8 @@ def main() -> None:
                         final[key] = existing[key]
                     else:
                         final[key] = value
+
+                final["reminder_sent"] = existing.get("reminder_sent", False)
                 enriched_games.append(final)
             else:
                 enriched_games.append(merged)
