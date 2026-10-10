@@ -1,8 +1,17 @@
 """
-OneSignal notification client.
+Firebase Cloud Messaging (FCM) topic notifications.
 
-Replaces firebase_admin.messaging entirely.
-Supports bilingual EN/AR notifications with retry logic.
+Phones subscribe themselves to a topic, so this module never needs a list of
+devices: it sends one message to `free_games_en` and one to `free_games_ar`
+and Firebase fans them out to every subscriber (Android directly, iOS via APNs).
+
+Authentication reuses the service-account key you already have
+(FIREBASE_CREDENTIALS_JSON) through the FCM HTTP v1 API. No firebase_admin.
+
+Optional environment variable:
+  PUSH_TOPIC_PREFIX  e.g. "dev_" to message development builds only
+                     (debug builds of the app subscribe to dev_ topics).
+  FCM_PROJECT_ID     overrides the project_id found in the service-account key.
 """
 
 import logging
@@ -10,24 +19,134 @@ import os
 import time
 
 import requests
+from google.auth.exceptions import GoogleAuthError
+from google.auth.transport.requests import Request
+from google.oauth2 import service_account
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Configuration (injected via environment — never hardcoded)
-# ---------------------------------------------------------------------------
-ONESIGNAL_APP_ID = os.getenv("ONESIGNAL_APP_ID")
-ONESIGNAL_REST_API_KEY = os.getenv("ONESIGNAL_REST_API_KEY")
-
-_API_URL = "https://onesignal.com/api/v1/notifications"
-_DEFAULT_SEGMENT = "All"
+_SCOPES = ["https://www.googleapis.com/auth/firebase.messaging"]
+_TOPIC_EN = "free_games_en"
+_TOPIC_AR = "free_games_ar"
 _MAX_RETRIES = 3
-_RETRY_BACKOFF_BASE = 2  # seconds; doubles each attempt
+_BACKOFF_BASE = 2  # seconds; doubles each attempt
+
+_credentials: service_account.Credentials | None = None
+_project_id: str | None = None
 
 
-# ---------------------------------------------------------------------------
-# Core delivery function
-# ---------------------------------------------------------------------------
+def configure(service_account_info: dict) -> None:
+    """Load the service-account key (the parsed FIREBASE_CREDENTIALS_JSON)."""
+    global _credentials, _project_id
+    _credentials = service_account.Credentials.from_service_account_info(
+        service_account_info, scopes=_SCOPES
+    )
+    _project_id = os.getenv("FCM_PROJECT_ID") or service_account_info.get("project_id")
+
+
+def _access_token(force: bool = False) -> str:
+    if _credentials is None or not _project_id:
+        raise RuntimeError("notifications.configure(service_account_info) was not called.")
+    if force or not _credentials.valid:
+        _credentials.refresh(Request())
+    return _credentials.token  # type: ignore[return-value]
+
+
+def _explain(resp: requests.Response) -> str:
+    try:
+        message = resp.json().get("error", {}).get("message", resp.text[:300])
+    except ValueError:
+        message = resp.text[:300]
+    text = f"FCM rejected the message: HTTP {resp.status_code} {message}"
+    if resp.status_code == 403:
+        text += (
+            " — enable 'Firebase Cloud Messaging API (V1)' for the project and give the "
+            "service account the role 'Firebase Cloud Messaging API Admin'."
+        )
+    elif resp.status_code == 404:
+        text += " — check the project id (FCM_PROJECT_ID / service-account project_id)."
+    return text
+
+
+def _send_message(message: dict) -> str:
+    """POST one message to FCM v1. Returns the message name. Retries transient errors."""
+    url = f"https://fcm.googleapis.com/v1/projects/{_project_id}/messages:send"
+    last_exc: Exception | None = None
+    force_refresh = False
+
+    for attempt in range(1, _MAX_RETRIES + 1):
+        try:
+            token = _access_token(force=force_refresh)
+            force_refresh = False
+            resp = requests.post(
+                url,
+                json={"message": message},
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=20,
+            )
+        except (requests.RequestException, GoogleAuthError) as exc:
+            last_exc = exc
+            if attempt < _MAX_RETRIES:
+                wait = _BACKOFF_BASE**attempt
+                logger.warning(
+                    "⚠️  FCM attempt %d/%d failed (%s). Retrying in %ds...",
+                    attempt, _MAX_RETRIES, exc, wait,
+                )
+                time.sleep(wait)
+            continue
+
+        if resp.status_code == 200:
+            return resp.json().get("name", "")
+
+        if resp.status_code == 401:  # expired token: refresh once and retry
+            force_refresh = True
+            last_exc = RuntimeError("HTTP 401")
+            continue
+
+        if resp.status_code == 429 or resp.status_code >= 500:
+            last_exc = RuntimeError(f"HTTP {resp.status_code}")
+            if attempt < _MAX_RETRIES:
+                wait = _BACKOFF_BASE**attempt
+                logger.warning(
+                    "⚠️  FCM attempt %d/%d got HTTP %d. Retrying in %ds...",
+                    attempt, _MAX_RETRIES, resp.status_code, wait,
+                )
+                time.sleep(wait)
+            continue
+
+        raise RuntimeError(_explain(resp))  # our fault: retrying will not help
+
+    raise RuntimeError(
+        f"FCM request failed after {_MAX_RETRIES} attempts: {last_exc}"
+    ) from last_exc
+
+
+def send_to_topic(
+    topic: str,
+    title: str,
+    body: str,
+    data: dict | None = None,
+    ttl: int = 86400,
+) -> str:
+    """Send one notification to everyone subscribed to `topic`."""
+    prefix = os.getenv("PUSH_TOPIC_PREFIX", "")
+    message: dict = {
+        "topic": f"{prefix}{topic}",
+        "notification": {"title": title, "body": body},
+        "android": {"priority": "HIGH", "ttl": f"{ttl}s"},
+        "apns": {
+            "headers": {
+                "apns-priority": "10",
+                "apns-expiration": str(int(time.time()) + ttl),
+            },
+            "payload": {"aps": {"sound": "default"}},
+        },
+    }
+    if data:
+        # FCM data payloads must be string -> string.
+        message["data"] = {k: str(v) for k, v in data.items()}
+    return _send_message(message)
+
 
 def send_notification(
     *,
@@ -36,102 +155,32 @@ def send_notification(
     content_en: str,
     content_ar: str,
     data: dict | None = None,
+    ttl: int = 86400,
 ) -> dict:
     """
-    Send a bilingual push notification via OneSignal to all subscribers.
+    Send the English text to the English topic and the Arabic text to the Arabic
+    topic. Raises RuntimeError if either send failed (the other is still attempted).
 
-    OneSignal automatically delivers the correct language variant based on
-    each device's locale — no client-side logic required.
-
-    Args:
-        heading_en: English notification title.
-        heading_ar: Arabic notification title (Unicode, RTL-safe).
-        content_en: English notification body.
-        content_ar: Arabic notification body (Unicode, RTL-safe).
-        data:       Optional key/value payload delivered alongside the push.
-
-    Returns:
-        The parsed JSON response from the OneSignal API.
-
-    Raises:
-        RuntimeError: If all retry attempts are exhausted.
-        EnvironmentError: If required env vars are missing.
+    Note: FCM topic sends do not report how many devices received the message.
+    A successful result means Firebase accepted it for delivery.
     """
-    if not ONESIGNAL_APP_ID or not ONESIGNAL_REST_API_KEY:
-        raise EnvironmentError(
-            "ONESIGNAL_APP_ID and ONESIGNAL_REST_API_KEY must be set."
-        )
+    results: dict = {}
+    errors: list[str] = []
 
-    payload: dict = {
-        "app_id": ONESIGNAL_APP_ID,
-        "included_segments": [_DEFAULT_SEGMENT],
-        # OneSignal i18n: keys are BCP-47 language codes.
-        # When a device's locale is 'ar', it receives the Arabic variant.
-        # All other locales fall back to 'en'.
-        "headings": {"en": heading_en, "ar": heading_ar},
-        "contents": {"en": content_en, "ar": content_ar},
-        "ttl": 2419200,
-
-    }
-
-    if data:
-        # Ensure all values are strings — OneSignal data payloads are
-        # string-only; non-string values will be silently dropped on some
-        # SDK versions.
-        payload["data"] = {k: str(v) for k, v in data.items()}
-
-    headers = {
-        "Authorization": f"Basic {ONESIGNAL_REST_API_KEY}",
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-    }
-
-    last_exc: Exception | None = None
-
-    for attempt in range(1, _MAX_RETRIES + 1):
+    for topic, title, body in (
+        (_TOPIC_EN, heading_en, content_en),
+        (_TOPIC_AR, heading_ar, content_ar),
+    ):
         try:
-            response = requests.post(
-                _API_URL, json=payload, headers=headers, timeout=10
-            )
-            response.raise_for_status()
+            results[topic] = send_to_topic(topic, title, body, data, ttl)
+            logger.info("📨 Push accepted for topic %s: %s", topic, results[topic])
+        except RuntimeError as exc:
+            errors.append(f"{topic}: {exc}")
+            logger.error("❌ Push to topic %s failed: %s", topic, exc)
 
-            result: dict = response.json()
-
-            # OneSignal returns HTTP 200 even for logical errors — check explicitly.
-            if errors := result.get("errors"):
-                raise ValueError(f"OneSignal API error: {errors}")
-
-            recipients = result.get("recipients", 0)
-            logger.info(
-                "✅ Notification delivered — recipients: %d | id: %s",
-                recipients,
-                result.get("id"),
-            )
-            return result
-
-        except (requests.RequestException, ValueError) as exc:
-            last_exc = exc
-            if attempt < _MAX_RETRIES:
-                wait = _RETRY_BACKOFF_BASE**attempt
-                logger.warning(
-                    "⚠️  Notification attempt %d/%d failed (%s). "
-                    "Retrying in %ds...",
-                    attempt,
-                    _MAX_RETRIES,
-                    exc,
-                    wait,
-                )
-                time.sleep(wait)
-            else:
-                logger.error(
-                    "❌ All %d notification attempts exhausted: %s",
-                    _MAX_RETRIES,
-                    exc,
-                )
-
-    raise RuntimeError(
-        f"Notification failed after {_MAX_RETRIES} attempts."
-    ) from last_exc
+    if errors:
+        raise RuntimeError("; ".join(errors))
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -139,13 +188,7 @@ def send_notification(
 # ---------------------------------------------------------------------------
 
 def notify_new_game(game: dict) -> None:
-    """
-    Send a 'new free game' push notification in English and Arabic.
-
-    Arabic copy uses natural, idiomatic phrasing and is encoded as
-    standard Unicode — no special handling needed beyond ensure_ascii=False
-    in any downstream JSON serialisation.
-    """
+    """Send a 'new free game' push in English and Arabic."""
     name = game.get("name") or game.get("title", "Unknown")
     store = game.get("store", "the store")
     worth = game.get("worth", "0.00")
@@ -163,6 +206,7 @@ def notify_new_game(game: dict) -> None:
                 "expiry_date": game.get("expiry_date", ""),
                 "click_action": "OPEN_GAME_PAGE",
             },
+            ttl=86400,  # 24h
         )
         logger.info("🎮 New-game notification sent for: %s", name)
     except (RuntimeError, EnvironmentError) as exc:
@@ -184,12 +228,8 @@ def notify_expiry_reminder(game: dict) -> None:
         send_notification(
             heading_en=f"Don't Miss {name}",
             heading_ar=f"لا تفوّت {name}",
-            content_en=(
-              f"Today is your LAST chance to claim this ${worth} game for FREE on {store}!"
-            ),
-            content_ar=(
-             f"اليوم آخر فرصة للحصول على اللعبة مجانًا من {store}!"
-            ),
+            content_en=f"Today is your LAST chance to claim this ${worth} game for FREE on {store}!",
+            content_ar=f"اليوم آخر فرصة للحصول على اللعبة مجانًا من {store}!",
             data={
                 "game_name": name,
                 "worth": worth,
@@ -197,6 +237,7 @@ def notify_expiry_reminder(game: dict) -> None:
                 "expiry_date": game.get("expiry_date", ""),
                 "click_action": "OPEN_GAME_PAGE",
             },
+            ttl=43200,  # 12h: a stale "last chance" is worse than none
         )
         logger.info("⏰ Expiry-reminder notification sent for: %s", name)
     except (RuntimeError, EnvironmentError) as exc:
