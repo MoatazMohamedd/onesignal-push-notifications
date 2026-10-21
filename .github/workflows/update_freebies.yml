@@ -34,9 +34,9 @@ jobs:
           FIREBASE_CREDENTIALS_JSON: ${{ secrets.FIREBASE_CREDENTIALS_JSON }}
           FIRESTORE_PROJECT_ID: ${{ secrets.FIRESTORE_PROJECT_ID }}
 
-          # OneSignal (replaces all FCM secrets)
-          ONESIGNAL_APP_ID: ${{ secrets.ONESIGNAL_APP_ID }}
-          ONESIGNAL_REST_API_KEY: ${{ secrets.ONESIGNAL_REST_API_KEY }}
+          # FCM HTTP v1 uses the same service-account JSON as Firestore.
+          # This override is optional; otherwise FCM uses project_id from it.
+          FCM_PROJECT_ID: ${{ secrets.FCM_PROJECT_ID }}
 
           # Game enrichment APIs (unchanged)
           IGDB_CLIENT_ID: ${{ secrets.IGDB_CLIENT_ID }}

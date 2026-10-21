@@ -30,6 +30,7 @@ _TOPIC_EN = "free_games_en"
 _TOPIC_AR = "free_games_ar"
 _MAX_RETRIES = 3
 _BACKOFF_BASE = 2  # seconds; doubles each attempt
+_MAX_TTL_SECONDS = 2_419_200  # FCM maximum: four weeks
 
 _credentials: service_account.Credentials | None = None
 _project_id: str | None = None
@@ -42,6 +43,11 @@ def configure(service_account_info: dict) -> None:
         service_account_info, scopes=_SCOPES
     )
     _project_id = os.getenv("FCM_PROJECT_ID") or service_account_info.get("project_id")
+    if not _project_id:
+        raise ValueError(
+            "FCM project id is missing. Set FCM_PROJECT_ID or include project_id "
+            "in FIREBASE_CREDENTIALS_JSON."
+        )
 
 
 def _access_token(force: bool = False) -> str:
@@ -129,6 +135,13 @@ def send_to_topic(
     ttl: int = 86400,
 ) -> str:
     """Send one notification to everyone subscribed to `topic`."""
+    if not topic or any(char in topic for char in "/ "):
+        raise ValueError(f"Invalid FCM topic: {topic!r}")
+    if not 0 <= ttl <= _MAX_TTL_SECONDS:
+        raise ValueError(
+            f"ttl must be between 0 and {_MAX_TTL_SECONDS} seconds, got {ttl}."
+        )
+
     prefix = os.getenv("PUSH_TOPIC_PREFIX", "")
     message: dict = {
         "topic": f"{prefix}{topic}",
@@ -193,24 +206,21 @@ def notify_new_game(game: dict) -> None:
     store = game.get("store", "the store")
     worth = game.get("worth", "0.00")
 
-    try:
-        send_notification(
-            heading_en=f"FREE {name}",
-            heading_ar=f"{name} مجانًا",
-            content_en=f"Save ${worth}. Thousands are claiming it on {store} — get it now!",
-            content_ar=f"وفر ${worth}. آلاف الأشخاص يحصلون عليه على {store} — احصل عليه الآن!",
-            data={
-                "game_name": name,
-                "worth": worth,
-                "store": store,
-                "expiry_date": game.get("expiry_date", ""),
-                "click_action": "OPEN_GAME_PAGE",
-            },
-            ttl=86400,  # 24h
-        )
-        logger.info("🎮 New-game notification sent for: %s", name)
-    except (RuntimeError, EnvironmentError) as exc:
-        logger.error("❌ New-game notification failed for %s: %s", name, exc)
+    send_notification(
+        heading_en=f"FREE {name}",
+        heading_ar=f"{name} مجانًا",
+        content_en=f"Save ${worth}. Thousands are claiming it on {store} — get it now!",
+        content_ar=f"وفر ${worth}. آلاف الأشخاص يحصلون عليه على {store} — احصل عليه الآن!",
+        data={
+            "game_name": name,
+            "worth": worth,
+            "store": store,
+            "expiry_date": game.get("expiry_date", ""),
+            "click_action": "OPEN_GAME_PAGE",
+        },
+        ttl=86400,  # 24h
+    )
+    logger.info("🎮 New-game notification accepted by FCM for: %s", name)
 
 
 def notify_expiry_reminder(game: dict) -> None:
@@ -224,21 +234,18 @@ def notify_expiry_reminder(game: dict) -> None:
     store = game.get("store", "the store")
     worth = game.get("worth", "0.00")
 
-    try:
-        send_notification(
-            heading_en=f"Don't Miss {name}",
-            heading_ar=f"لا تفوّت {name}",
-            content_en=f"Today is your LAST chance to claim this ${worth} game for FREE on {store}!",
-            content_ar=f"اليوم آخر فرصة للحصول على اللعبة مجانًا من {store}!",
-            data={
-                "game_name": name,
-                "worth": worth,
-                "store": store,
-                "expiry_date": game.get("expiry_date", ""),
-                "click_action": "OPEN_GAME_PAGE",
-            },
-            ttl=43200,  # 12h: a stale "last chance" is worse than none
-        )
-        logger.info("⏰ Expiry-reminder notification sent for: %s", name)
-    except (RuntimeError, EnvironmentError) as exc:
-        logger.error("❌ Expiry-reminder failed for %s: %s", name, exc)
+    send_notification(
+        heading_en=f"Don't Miss {name}",
+        heading_ar=f"لا تفوّت {name}",
+        content_en=f"Today is your LAST chance to claim this ${worth} game for FREE on {store}!",
+        content_ar=f"اليوم آخر فرصة للحصول على اللعبة مجانًا من {store}!",
+        data={
+            "game_name": name,
+            "worth": worth,
+            "store": store,
+            "expiry_date": game.get("expiry_date", ""),
+            "click_action": "OPEN_GAME_PAGE",
+        },
+        ttl=43200,  # 12h: a stale "last chance" is worse than none
+    )
+    logger.info("⏰ Expiry reminder accepted by FCM for: %s", name)
