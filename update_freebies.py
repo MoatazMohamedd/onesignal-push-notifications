@@ -111,8 +111,10 @@ def is_confusing_match(gp_title: str, igdb_name: str) -> bool:
 # Mobile giveaways are listed by GamerPower with Android / iOS platforms.
 _MOBILE_RE = re.compile(r"\b(?:android|ios|mobile)\b")
 
-# Pass 1: the `platforms` field is the most reliable signal.
-_PLATFORM_STORE_PATTERNS = [
+# These are explicit storefront signals.  Do not put DRM-Free here: it is a
+# delivery method, not a storefront, and GamerPower frequently combines it
+# with a store named in the giveaway title (for example, "(IndieGala)").
+_STORE_PATTERNS = [
     ("Steam", r"\bsteam\b"),
     ("Epic Games Store", r"\bepic\b"),
     ("GOG", r"\bgog\b"),
@@ -121,38 +123,117 @@ _PLATFORM_STORE_PATTERNS = [
     ("STOVE", r"\bstove\b"),
     ("Itch.io", r"\bitch(?:\.io)?\b"),
     ("Rift", r"\brift\b"),
-    ("DRM-Free", r"\bdrm-free\b"),
+    ("Meta Quest", r"\bmeta quest\b|\boculus quest\b"),
+    ("Battle.net", r"\bbattle\.net\b"),
+    ("Ubisoft Connect", r"\bubisoft(?: connect)?\b|\buplay\b"),
+    ("Microsoft Store", r"\bmicrosoft store\b|\bxbox(?: app)?\b"),
+    ("Nintendo eShop", r"\bnintendo(?: eshop)?\b|\bswitch\b"),
+    ("PlayStation Store", r"\bplaystation\b|\bps[45]\b"),
+    ("Amazon Games", r"\bamazon games?\b|\bprime gaming\b"),
+    ("Humble Bundle", r"\bhumble bundle\b"),
+    ("Fanatical", r"\bfanatical\b"),
+    ("Green Man Gaming", r"\bgreen man gaming\b"),
+    ("Game Jolt", r"\bgame jolt\b"),
+    ("Google Play", r"\bgoogle play\b"),
+    ("App Store", r"\bapp store\b"),
 ]
 
-# Pass 2: title/description, unambiguous phrases only (avoids matching words
-# like "epic adventure", "origin story" or "steampunk").
+# Free-form descriptions can naturally contain words such as "epic", "rift",
+# or "origin".  Only use unambiguous storefront phrases outside the title and
+# `platforms` field.
 _TEXT_STORE_PATTERNS = [
     ("Steam", r"\bsteam\b"),
-    ("Epic Games Store", r"\bepic games\b"),
+    ("Epic Games Store", r"\bepic games(?: store)?\b"),
     ("GOG", r"\bgog(?:\.com)?\b"),
+    ("Origin", r"\b(?:origin|ea) (?:store|app)\b"),
     ("IndieGala", r"\bindiegala\b"),
+    ("STOVE", r"\bstove store\b"),
     ("Itch.io", r"\bitch\.io\b"),
-    ("DRM-Free", r"\bdrm-free\b"),
+    ("Rift", r"\b(?:oculus )?rift\b"),
+    ("Meta Quest", r"\bmeta quest\b|\boculus quest\b"),
+    ("Battle.net", r"\bbattle\.net\b"),
+    ("Ubisoft Connect", r"\bubisoft connect\b|\buplay\b"),
+    ("Microsoft Store", r"\bmicrosoft store\b|\bxbox app\b"),
+    ("Nintendo eShop", r"\bnintendo eshop\b"),
+    ("PlayStation Store", r"\bplaystation store\b"),
+    ("Amazon Games", r"\bamazon games?\b|\bprime gaming\b"),
+    ("Humble Bundle", r"\bhumble bundle\b"),
+    ("Fanatical", r"\bfanatical\b"),
+    ("Green Man Gaming", r"\bgreen man gaming\b"),
+    ("Game Jolt", r"\bgame jolt\b"),
+    ("Google Play", r"\bgoogle play\b"),
+    ("App Store", r"\bapp store\b"),
 ]
+
+# GamerPower's conventional "Game (Store) Giveaway" title is its most useful
+# fallback.  Unknown labels are retained instead of discarded, which lets the
+# app support new GamerPower storefronts without waiting for a code release.
+_TITLE_STOREFRONT_RE = re.compile(
+    r"\((?P<store>[^()]+)\)\s*(?:key\s+)?giveaway\b", re.IGNORECASE
+)
+_NON_STOREFRONT_TITLE_LABELS = {
+    "android", "app", "ios", "key", "mobile", "pc", "vr", "windows",
+}
+
+
+def _store_from_title(title: str) -> str | None:
+    """Return the canonical or GamerPower-supplied storefront in a title."""
+    match = _TITLE_STOREFRONT_RE.search(title)
+    if not match:
+        return None
+
+    label = re.sub(r"\s+", " ", match.group("store")).strip()
+    label_lower = label.lower()
+    for store_name, pattern in _STORE_PATTERNS:
+        if re.search(pattern, label_lower):
+            return store_name
+
+    # A named title label is preferable to incorrectly showing DRM-Free or
+    # Unknown.  Ignore only platform/type labels, which are not storefronts.
+    if label_lower not in _NON_STOREFRONT_TITLE_LABELS:
+        return label
+    return None
 
 
 def detect_store(offer: dict) -> str:
-    title = (offer.get("title", "") or "").lower()
-    desc = (offer.get("description", "") or "").lower()
+    title = (offer.get("title", "") or "")
+    desc = (offer.get("description", "") or "")
     platforms = (offer.get("platforms", "") or "").lower()
+    text = f"{title} {desc}".lower()
 
-    # Mobile giveaways first, so they never get labelled as a PC store.
-    if _MOBILE_RE.search(platforms):
+    # Keep the existing Epic mobile treatment, including offers that list PC
+    # alongside Android/iOS (such as Epic's mobile-store giveaways).
+    if _MOBILE_RE.search(platforms) and re.search(r"\bepic(?: games)?\b", text):
         return "Epic Games Mobile"
 
-    for store_name, pattern in _PLATFORM_STORE_PATTERNS:
+    # A named storefront in the title takes priority over generic platforms
+    # such as PC, VR, or DRM-Free.
+    title_store = _store_from_title(title)
+    if title_store:
+        return title_store
+
+    # Then use explicit storefronts in GamerPower's platforms field or text.
+    for store_name, pattern in _STORE_PATTERNS:
         if re.search(pattern, platforms):
             return store_name
 
-    text = f"{title} {desc}"
     for store_name, pattern in _TEXT_STORE_PATTERNS:
         if re.search(pattern, text):
             return store_name
+
+    # Generic mobile offers may be distributed through one or both mobile
+    # stores.  This also avoids classifying every Android/iOS game as Epic.
+    if _MOBILE_RE.search(platforms):
+        if re.search(r"\bandroid\b", platforms) and re.search(r"\bios\b", platforms):
+            return "Google Play & App Store"
+        if re.search(r"\bandroid\b", platforms):
+            return "Google Play"
+        if re.search(r"\bios\b", platforms):
+            return "App Store"
+
+    # Only use DRM-Free when no actual storefront is available.
+    if re.search(r"\bdrm-free\b", platforms) or re.search(r"\bdrm-free\b", text):
+        return "DRM-Free"
 
     return "Unknown"
 
