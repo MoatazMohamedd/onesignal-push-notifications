@@ -308,8 +308,8 @@ def append_skipped(game: dict, reason: str) -> None:
 # GamerPower
 # ---------------------------------------------------------------------------
 
-def fetch_gamerpower_games() -> list[dict]:
-    """Fetch current free games from the GamerPower API."""
+def fetch_gamerpower_games() -> list[dict] | None:
+    """Fetch eligible deals; return None only when the API request fails."""
     try:
         resp = requests.get(GAMERPOWER_API, timeout=10)
         resp.raise_for_status()
@@ -320,13 +320,30 @@ def fetch_gamerpower_games() -> list[dict]:
                 continue
 
             end_date = offer.get("end_date")
-            expiry_date = (
-                end_date
-                if end_date and end_date != "N/A"
-                else (datetime.utcnow() + timedelta(days=30)).strftime(
-                    "%Y-%m-%d %H:%M:%S"
+            unknown_expiry_values = {"n/a", "na", "unknown", "tba"}
+            if (
+                not isinstance(end_date, str)
+                or not end_date.strip()
+                or end_date.strip().casefold() in unknown_expiry_values
+            ):
+                logger.info(
+                    "Skipping GamerPower offer with no expiry date: %s (%s)",
+                    offer.get("id"),
+                    offer.get("title", "unknown title"),
                 )
-            )
+                continue
+
+            expiry_date = end_date.strip()
+            try:
+                datetime.fromisoformat(expiry_date.replace("Z", "+00:00"))
+            except ValueError:
+                logger.info(
+                    "Skipping GamerPower offer with an invalid expiry date: %s (%s)",
+                    offer.get("id"),
+                    offer.get("title", "unknown title"),
+                )
+                continue
+
             if is_expired(expiry_date):
                 logger.info(
                     "Skipping expired GamerPower offer %s (%s)",
@@ -355,7 +372,7 @@ def fetch_gamerpower_games() -> list[dict]:
 
     except Exception as exc:
         logger.error("❌ Error fetching GamerPower data: %s", exc)
-        return []
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -617,9 +634,9 @@ def main() -> None:
     logger.info("🎮 Fetching GamerPower freebies...")
     gp_games = fetch_gamerpower_games()
 
-    if not gp_games:
+    if gp_games is None:
         logger.warning(
-            "⚠️  No games fetched from GamerPower; preserving active feed entries."
+            "⚠️  GamerPower fetch failed; preserving active feed entries."
         )
         stored_games = get_firestore_games()
         active_games = [
@@ -636,6 +653,9 @@ def main() -> None:
                 len(stored_games) - len(active_games),
             )
         return
+
+    if not gp_games:
+        logger.info("No eligible GamerPower deals with a known expiry date were found.")
 
     logger.info("📥 Found %d games from GamerPower", len(gp_games))
 
