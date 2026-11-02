@@ -124,7 +124,7 @@ _STORE_PATTERNS = [
     ("Origin", r"\borigin\b|\bea app\b"),
     ("IndieGala", r"\bindiegala\b"),
     ("STOVE", r"\bstove\b"),
-    ("Itch.io", r"\bitch(?:\.io)?\b"),
+    ("Itch.io", r"\bitch(?:\.?io)?\b"),
     ("Rift", r"\brift\b"),
     ("Meta Quest", r"\bmeta quest\b|\boculus quest\b"),
     ("Battle.net", r"\bbattle\.net\b"),
@@ -151,7 +151,7 @@ _TEXT_STORE_PATTERNS = [
     ("Origin", r"\b(?:origin|ea) (?:store|app)\b"),
     ("IndieGala", r"\bindiegala\b"),
     ("STOVE", r"\bstove store\b"),
-    ("Itch.io", r"\bitch\.io\b"),
+    ("Itch.io", r"\bitch\.?io\b"),
     ("Rift", r"\b(?:oculus )?rift\b"),
     ("Meta Quest", r"\bmeta quest\b|\boculus quest\b"),
     ("Battle.net", r"\bbattle\.net\b"),
@@ -241,6 +241,20 @@ def detect_store(offer: dict) -> str:
     return "Unknown"
 
 
+def normalize_store_name(store: str) -> str:
+    """Keep common aliases stable in Firestore while leaving new stores dynamic."""
+    cleaned = re.sub(r"\s+", " ", (store or "").strip())
+    key = re.sub(r"[^a-z0-9]", "", cleaned.lower())
+    canonical = {
+        "itchio": "Itch.io",
+        "epicgames": "Epic Games Store",
+        "epicgamesstore": "Epic Games Store",
+        "epicgamesmobile": "Epic Games Mobile",
+        "indiegala": "IndieGala",
+    }
+    return canonical.get(key, cleaned)
+
+
 # ---------------------------------------------------------------------------
 # Data merging / skipped-game logging
 # ---------------------------------------------------------------------------
@@ -249,6 +263,27 @@ def merge_game_data(gp_game: dict, igdb_data: dict) -> dict:
     merged = {**gp_game, **igdb_data}
     merged["open_giveaway_url"] = gp_game.get("open_giveaway_url")
     return merged
+
+
+def gamerpower_mobile_fallback(gp_game: dict) -> dict:
+    """Keep Epic mobile deals visible when IGDB lacks a safe mobile match."""
+    fallback_id = -abs(int(gp_game["gamerpower_id"]))
+    return {
+        **gp_game,
+        "id": fallback_id,
+        "name": gp_game["title"],
+        "cover_url": gp_game.get("cover_url") or "",
+        "first_release_date": 0,
+        "game_engines": [],
+        "game_modes": [],
+        "genres": [],
+        "websites": [],
+        "player_perspectives": [],
+        "screenshots": [],
+        "storyline": "",
+        "summary": gp_game.get("summary") or "",
+        "total_rating": 0,
+    }
 
 
 def append_skipped(game: dict, reason: str) -> None:
@@ -292,6 +327,13 @@ def fetch_gamerpower_games() -> list[dict]:
                     "%Y-%m-%d %H:%M:%S"
                 )
             )
+            if is_expired(expiry_date):
+                logger.info(
+                    "Skipping expired GamerPower offer %s (%s)",
+                    offer.get("id"),
+                    offer.get("title", "unknown title"),
+                )
+                continue
 
             clean_title = re.sub(r"\s*\(.*?\)", "", offer["title"])
             clean_title = re.sub(r"\s*Giveaway", "", clean_title).strip()
@@ -300,8 +342,10 @@ def fetch_gamerpower_games() -> list[dict]:
             games.append({
                 "gamerpower_id": offer["id"],
                 "title": clean_title,
+                "cover_url": offer.get("thumbnail") or offer.get("image") or "",
+                "summary": offer.get("description") or "",
                 "worth": worth,
-                "store": detect_store(offer),
+                "store": normalize_store_name(detect_store(offer)),
                 "expiry_date": expiry_date,
                 "open_giveaway_url": (
                     offer.get("open_giveaway_url") or offer.get("open_giveaway")
@@ -352,8 +396,21 @@ def fetch_igdb_data(
                 append_skipped(gp_game, f"Confusing match with '{candidate}'")
                 continue
             platforms = [str(p) for p in result.get("platforms", [])]
-            if not any(pid in platforms for pid in ("6", "14", "92")):
-                append_skipped(gp_game, f"Non-PC platform match: {candidate}")
+            expected_platforms = (
+                ("34", "39")
+                if gp_game.get("store") == "Epic Games Mobile"
+                else ("6", "14", "92")
+            )
+            if not any(pid in platforms for pid in expected_platforms):
+                platform_label = (
+                    "mobile"
+                    if gp_game.get("store") == "Epic Games Mobile"
+                    else "PC"
+                )
+                append_skipped(
+                    gp_game,
+                    f"Non-{platform_label} platform match: {candidate}",
+                )
                 continue
             return _transform_igdb(result)
 
@@ -420,6 +477,17 @@ def is_expiring_today(expiry_date: str) -> bool:
     now_utc = datetime.now(timezone.utc)
 
     return exp.date() == now_utc.date()
+
+
+def is_expired(expiry_date: str, now: datetime | None = None) -> bool:
+    """Return True only when a parseable expiry timestamp has passed (UTC)."""
+    try:
+        expiry = datetime.fromisoformat(expiry_date.replace("Z", "+00:00"))
+        if expiry.tzinfo is None:
+            expiry = expiry.replace(tzinfo=timezone.utc)
+    except (AttributeError, TypeError, ValueError):
+        return False
+    return expiry <= (now or datetime.now(timezone.utc))
 
 
 # ---------------------------------------------------------------------------
@@ -550,7 +618,23 @@ def main() -> None:
     gp_games = fetch_gamerpower_games()
 
     if not gp_games:
-        logger.warning("⚠️  No games fetched from GamerPower. Exiting.")
+        logger.warning(
+            "⚠️  No games fetched from GamerPower; preserving active feed entries."
+        )
+        stored_games = get_firestore_games()
+        active_games = [
+            game
+            for game in stored_games
+            if not is_expired(game.get("expiry_date", ""))
+        ]
+        for game in active_games:
+            game["store"] = normalize_store_name(game.get("store", ""))
+        if len(active_games) != len(stored_games):
+            enqueue_and_persist(active_games, [])
+            logger.info(
+                "Removed %d expired games from Firestore",
+                len(stored_games) - len(active_games),
+            )
         return
 
     logger.info("📥 Found %d games from GamerPower", len(gp_games))
@@ -594,6 +678,15 @@ def main() -> None:
             )
 
             if not igdb_data:
+                if gp_game.get("store") == "Epic Games Mobile":
+                    enriched_games.append(gamerpower_mobile_fallback(gp_game))
+                    if is_new:
+                        newly_added_games.append(enriched_games[-1])
+                    logger.info(
+                        "Keeping Epic Games Mobile deal with GamerPower metadata: %s",
+                        gp_game["title"],
+                    )
+                    continue
                 logger.warning("⚠️  Skipped %s (no IGDB match)", gp_game["title"])
                 continue
 
@@ -631,6 +724,19 @@ def main() -> None:
             }
             enriched_games.append(refreshed)
 
+    # Recheck after enrichment because a long IGDB batch can cross an offer's
+    # expiry time. Keep notification digests and the Firestore feed in sync.
+    enriched_games = [
+        game
+        for game in enriched_games
+        if not is_expired(game.get("expiry_date", ""))
+    ]
+    active_ids = {game.get("gamerpower_id") for game in enriched_games}
+    newly_added_games = [
+        game for game in newly_added_games
+        if game.get("gamerpower_id") in active_ids
+    ]
+
     logger.info("⏰ Checking for games expiring today...")
     expiry_games: list[dict] = []
     for game in enriched_games:
@@ -647,6 +753,13 @@ def main() -> None:
             game["reminder_sent"] = True
 
     final_games = MANUAL_GAMES + enriched_games
+    final_games = [
+        game
+        for game in final_games
+        if not is_expired(game.get("expiry_date", ""))
+    ]
+    for game in final_games:
+        game["store"] = normalize_store_name(game.get("store", ""))
     if MANUAL_GAMES:
         logger.info("📌 Prepended %d manual games", len(MANUAL_GAMES))
 
