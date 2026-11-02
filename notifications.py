@@ -133,6 +133,7 @@ def send_to_topic(
     body: str,
     data: dict | None = None,
     ttl: int = 86400,
+    analytics_label: str | None = None,
 ) -> str:
     """Send one notification to everyone subscribed to `topic`."""
     if not topic or any(char in topic for char in "/ "):
@@ -155,6 +156,8 @@ def send_to_topic(
             "payload": {"aps": {"sound": "default"}},
         },
     }
+    if analytics_label:
+        message["fcm_options"] = {"analytics_label": analytics_label}
     if data:
         # FCM data payloads must be string -> string.
         message["data"] = {k: str(v) for k, v in data.items()}
@@ -197,55 +200,78 @@ def send_notification(
 
 
 # ---------------------------------------------------------------------------
-# Domain-specific helpers (called from update_freebies.py)
+# Localized digest copy
 # ---------------------------------------------------------------------------
 
-def notify_new_game(game: dict) -> None:
-    """Send a 'new free game' push in English and Arabic."""
-    name = game.get("name") or game.get("title", "Unknown")
-    store = game.get("store", "the store")
-    worth = game.get("worth", "0.00")
+def build_new_games_message(games: list[dict]) -> dict:
+    """Build one concise, truthful push for all games discovered in one run."""
+    names = [str(g.get("name") or g.get("title") or "a free game") for g in games]
+    stores = sorted({str(g.get("store") or "the store") for g in games})
+    shown_names = ", ".join(names[:3])
+    if len(names) > 3:
+        shown_names += f" +{len(names) - 3} more"
 
-    send_notification(
-        heading_en=f"FREE {name}",
-        heading_ar=f"{name} مجانًا",
-        content_en=f"Save ${worth}. Thousands are claiming it on {store} — get it now!",
-        content_ar=f"وفر ${worth}. آلاف الأشخاص يحصلون عليه على {store} — احصل عليه الآن!",
-        data={
-            "game_name": name,
-            "worth": worth,
-            "store": store,
-            "expiry_date": game.get("expiry_date", ""),
+    if len(games) == 1:
+        store = stores[0]
+        title_en = f"Did you catch {names[0]}?"
+        body_en = f"Free to keep on {store}. Tap to check the deal before it ends."
+        title_ar = f"لحقت {names[0]}؟"
+        body_ar = f"اللعبة مجانية على {store}. افتح العرض وشوف التفاصيل قبل ما يخلص."
+    else:
+        count = len(games)
+        title_en = "Free games just dropped"
+        body_en = f"{count} new free-to-keep deals, including {shown_names}. Tap to see them before they end."
+        title_ar = "ألعاب مجانية جديدة نزلت"
+        body_ar = f"فيه {count} عروض جديدة، منها {shown_names}. افتح القائمة وشوفها قبل ما العروض تخلص."
+
+    return {
+        "title_en": title_en,
+        "body_en": body_en,
+        "title_ar": title_ar,
+        "body_ar": body_ar,
+        "data": {
+            "notification_type": "new_games",
+            "game_names": "|".join(names[:10]),
+            "game_ids": "|".join(str(g.get("gamerpower_id", "")) for g in games[:10]),
             "click_action": "OPEN_GAME_PAGE",
         },
-        ttl=86400,  # 24h
-    )
-    logger.info("🎮 New-game notification accepted by FCM for: %s", name)
+        "analytics_label": "new-games",
+        "ttl": 6 * 60 * 60,
+    }
 
 
-def notify_expiry_reminder(game: dict) -> None:
-    """
-    Send a 'last chance' expiry reminder in English and Arabic.
+def build_expiry_digest_message(games: list[dict]) -> dict:
+    """Build one end-of-day reminder for all still-listed expiring deals."""
+    names = [str(g.get("name") or g.get("title") or "a free game") for g in games]
+    stores = sorted({str(g.get("store") or "the store") for g in games})
+    shown_names = ", ".join(names[:3])
+    if len(names) > 3:
+        shown_names += f" +{len(names) - 3} more"
 
-    Only called when reminder_sent is False for this game; the flag is set
-    by the caller (update_freebies.py) after this function returns.
-    """
-    name = game.get("name") or game.get("title", "Unknown")
-    store = game.get("store", "the store")
-    worth = game.get("worth", "0.00")
+    if len(games) == 1:
+        store = stores[0]
+        title_en = f"Last call: {names[0]} ends today"
+        body_en = f"The free offer on {store} ends today. Tap to check it while it is still live."
+        title_ar = f"آخر فرصة لـ {names[0]}"
+        body_ar = f"عرض اللعبة على {store} بينتهي النهارده. افتح التفاصيل قبل ما يخلص."
+    else:
+        count = len(games)
+        title_en = "These free games end today"
+        body_en = f"{count} offers end today, including {shown_names}. Tap to check what is still available."
+        title_ar = "عروض مجانية بتنتهي النهارده"
+        body_ar = f"منها {shown_names}. افتح Games Orb وشوف العروض اللي لسه متاحة."
 
-    send_notification(
-        heading_en=f"Don't Miss {name}",
-        heading_ar=f"لا تفوّت {name}",
-        content_en=f"Today is your LAST chance to claim this ${worth} game for FREE on {store}!",
-        content_ar=f"اليوم آخر فرصة للحصول على اللعبة مجانًا من {store}!",
-        data={
-            "game_name": name,
-            "worth": worth,
-            "store": store,
-            "expiry_date": game.get("expiry_date", ""),
+    return {
+        "title_en": title_en,
+        "body_en": body_en,
+        "title_ar": title_ar,
+        "body_ar": body_ar,
+        "data": {
+            "notification_type": "expiry_digest",
+            "game_names": "|".join(names[:10]),
+            "game_ids": "|".join(str(g.get("gamerpower_id", "")) for g in games[:10]),
             "click_action": "OPEN_GAME_PAGE",
         },
-        ttl=43200,  # 12h: a stale "last chance" is worse than none
-    )
-    logger.info("⏰ Expiry reminder accepted by FCM for: %s", name)
+        "analytics_label": "expiry-digest",
+        "ttl": 3 * 60 * 60,
+    }

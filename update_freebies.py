@@ -5,6 +5,7 @@ Notification delivery is delegated entirely to notifications.py (FCM topics).
 Firestore is accessed directly via google-cloud-firestore.
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -19,7 +20,7 @@ from google.cloud import firestore
 from google.oauth2 import service_account
 
 import notifications
-from notifications import notify_expiry_reminder, notify_new_game
+from notifications import build_expiry_digest_message, build_new_games_message
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -42,6 +43,8 @@ IGDB_ACCESS_TOKEN = os.getenv("IGDB_ACCESS_TOKEN")
 
 FIREBASE_CREDENTIALS_JSON = os.getenv("FIREBASE_CREDENTIALS_JSON")
 FIRESTORE_PROJECT_ID = os.getenv("FIRESTORE_PROJECT_ID")
+OUTBOX_COLLECTION = "notification_outbox"
+NEW_GAME_NOTIFICATION_TTL_SECONDS = 6 * 60 * 60
 
 # ---------------------------------------------------------------------------
 # Manual games (prepended to the Firestore array)
@@ -425,50 +428,114 @@ def is_expiring_today(expiry_date: str) -> bool:
 
 def get_firestore_games() -> list[dict]:
     """Read the current game list from Firestore."""
-    try:
-        doc = firestore_client.collection("all_freebies").document("games").get()
-        if doc.exists:
-            return (doc.to_dict() or {}).get("games", [])
-        return []
-    except Exception as exc:
-        logger.error("❌ Firestore read failed: %s", exc)
-        return []
+    doc = firestore_client.collection("all_freebies").document("games").get()
+    if doc.exists:
+        payload = doc.to_dict() or {}
+        games = payload.get("games")
+        if not isinstance(games, list):
+            raise ValueError("Firestore all_freebies/games has no valid games list")
+        return games
+    return []
 
 
-def update_firestore_games(games: list[dict]) -> None:
-    """Persist the updated game list to Firestore."""
-    try:
-        firestore_client.collection("all_freebies").document("games").set(
-            {"games": games}
-        )
-        logger.info("✅ Saved %d games to Firestore", len(games))
-    except Exception as exc:
-        logger.error("❌ Firestore write failed: %s", exc)
+def _outbox_id(event_id: str, topic: str) -> str:
+    return f"{event_id}_{topic}"
 
 
 # ---------------------------------------------------------------------------
 # Expiry reminder dispatch
 # ---------------------------------------------------------------------------
 
-def send_expiry_reminders(
-    games: list[dict], firestore_games: list[dict]
-) -> None:
-    """
-    Send expiry reminders for games that expire today and haven't been
-    reminded yet. Updates reminder_sent flag in-place on the game dict.
-    """
-    firestore_map = {g["gamerpower_id"]: g for g in firestore_games}
+def enqueue_and_persist(games: list[dict], events: list[dict]) -> None:
+    """Commit the feed and notification outbox entries in one Firestore batch."""
+    outbox = firestore_client.collection(OUTBOX_COLLECTION)
+    prepared = []
+    for event in events:
+        for topic, language in (("free_games_en", "en"), ("free_games_ar", "ar")):
+            ref = outbox.document(_outbox_id(event["event_id"], topic))
+            if ref.get().exists:
+                continue
+            prepared.append((ref, {
+                "event_id": event["event_id"], "type": event["type"],
+                "topic": topic, "title": event[f"title_{language}"],
+                "body": event[f"body_{language}"], "data": event["data"],
+                "analytics_label": event["analytics_label"], "ttl": event["ttl"],
+                "valid_until": event["valid_until"], "status": "pending",
+                "attempts": 0, "created_at": datetime.now(timezone.utc),
+            }))
 
-    for game in games:
-        if not is_expiring_today(game.get("expiry_date", "")):
+    batch = firestore_client.batch()
+    batch.set(
+        firestore_client.collection("all_freebies").document("games"),
+        {"games": games},
+    )
+    for ref, payload in prepared:
+        batch.set(ref, payload)
+    batch.commit()
+    logger.info("Saved %d games and queued %d topic messages", len(games), len(prepared))
+
+
+def drain_notification_outbox() -> None:
+    """Send fresh pending messages; retain failures for a later hourly retry."""
+    now = datetime.now(timezone.utc)
+    pending = firestore_client.collection(OUTBOX_COLLECTION).where(
+        "status", "==", "pending"
+    ).stream()
+    for doc in pending:
+        item = doc.to_dict() or {}
+        valid_until = item.get("valid_until")
+        if not valid_until or valid_until <= now:
+            doc.reference.update({"status": "expired", "expired_at": now})
             continue
-
-        existing = firestore_map.get(game["gamerpower_id"], {})
-        if existing.get("reminder_sent"):
+        remaining_seconds = max(0, int((valid_until - now).total_seconds()))
+        ttl = min(int(item.get("ttl", 0)), remaining_seconds)
+        if ttl <= 0:
+            doc.reference.update({"status": "expired", "expired_at": now})
             continue
+        try:
+            message_name = notifications.send_to_topic(
+                item["topic"], item["title"], item["body"],
+                data=item.get("data"), ttl=ttl,
+                analytics_label=item.get("analytics_label"),
+            )
+            doc.reference.update({
+                "status": "sent", "sent_at": datetime.now(timezone.utc),
+                "fcm_message_name": message_name, "attempts": firestore.Increment(1),
+            })
+            logger.info("Push accepted for %s (%s)", doc.id, item["topic"])
+        except Exception as exc:
+            doc.reference.update({
+                "attempts": firestore.Increment(1), "last_error": str(exc)[:500],
+                "last_attempt_at": datetime.now(timezone.utc),
+            })
+            logger.error(
+                "Push attempt failed for %s; retrying before expiry: %s",
+                doc.id,
+                exc,
+            )
 
-        notify_expiry_reminder(game)
-        game["reminder_sent"] = True
+
+def _new_event(games: list[dict], now: datetime) -> dict | None:
+    if not games:
+        return None
+    message = build_new_games_message(games)
+    ids = sorted(str(game["gamerpower_id"]) for game in games)
+    digest = hashlib.sha256(",".join(ids).encode("utf-8")).hexdigest()[:20]
+    return {
+        **message, "event_id": f"new-games-{digest}", "type": "new_games",
+        "valid_until": now + timedelta(seconds=NEW_GAME_NOTIFICATION_TTL_SECONDS),
+    }
+
+
+def _expiry_event(games: list[dict], now: datetime) -> dict | None:
+    if not games:
+        return None
+    message = build_expiry_digest_message(games)
+    return {
+        **message, "event_id": f"expiry-digest-{now.date().isoformat()}",
+        "type": "expiry_digest",
+        "valid_until": now.replace(hour=23, minute=59, second=59, microsecond=0),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -476,6 +543,9 @@ def send_expiry_reminders(
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    # Retry any fresh messages left by a previous transient FCM outage.
+    drain_notification_outbox()
+
     logger.info("🎮 Fetching GamerPower freebies...")
     gp_games = fetch_gamerpower_games()
 
@@ -505,6 +575,7 @@ def main() -> None:
 
     firestore_map = {g["gamerpower_id"]: g for g in firestore_games}
     enriched_games: list[dict] = []
+    newly_added_games: list[dict] = []
 
     for gp_game in gp_games:
         gp_id = gp_game["gamerpower_id"]
@@ -542,10 +613,10 @@ def main() -> None:
                 final["reminder_sent"] = existing.get("reminder_sent", False)
                 enriched_games.append(final)
             else:
+                merged["reminder_sent"] = False
                 enriched_games.append(merged)
-
-            if is_new:
-                notify_new_game(merged)
+                if is_new:
+                    newly_added_games.append(merged)
 
         else:
             # Existing game with IGDB data — refresh mutable API fields only.
@@ -561,13 +632,32 @@ def main() -> None:
             enriched_games.append(refreshed)
 
     logger.info("⏰ Checking for games expiring today...")
-    send_expiry_reminders(enriched_games, firestore_games)
+    expiry_games: list[dict] = []
+    for game in enriched_games:
+        if not is_expiring_today(game.get("expiry_date", "")):
+            continue
+        if game.get("reminder_sent"):
+            continue
+        if game.get("gamerpower_id") in added_ids:
+            # The new-deal digest already calls this out; avoid another push
+            # for the same game on the next hourly run.
+            game["reminder_sent"] = True
+        else:
+            expiry_games.append(game)
+            game["reminder_sent"] = True
 
     final_games = MANUAL_GAMES + enriched_games
     if MANUAL_GAMES:
         logger.info("📌 Prepended %d manual games", len(MANUAL_GAMES))
 
-    update_firestore_games(final_games)
+    now = datetime.now(timezone.utc)
+    events = [event for event in (
+        _new_event(newly_added_games, now), _expiry_event(expiry_games, now)
+    ) if event]
+    # The feed state and pending pushes become durable in a single commit.
+    # If this fails, no notification is sent and the workflow fails visibly.
+    enqueue_and_persist(final_games, events)
+    drain_notification_outbox()
 
     if removed_ids:
         logger.info("🗑️  Removed %d expired games", len(removed_ids))
