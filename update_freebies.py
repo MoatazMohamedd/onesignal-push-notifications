@@ -96,6 +96,28 @@ def normalize_title(title: str) -> str:
     return re.sub(r"\s+", " ", " ".join(tokens)).strip()
 
 
+# Choose the metadata source for a title when IGDB has an ambiguous or bad
+# record. Keys use normalized titles (lowercase, punctuation-free). Set a
+# value to "gamerpower" to use the giveaway's own title, artwork, description,
+# and complete raw API payload instead of querying IGDB.
+GAME_METADATA_SOURCE_OVERRIDES: dict[str, str] = {
+    "flotsam": "gamerpower",
+}
+
+
+def metadata_source_for(title: str) -> str:
+    """Return the configured metadata source, defaulting to IGDB."""
+    source = GAME_METADATA_SOURCE_OVERRIDES.get(normalize_title(title), "igdb")
+    if source not in {"igdb", "gamerpower"}:
+        logger.warning(
+            "Unknown metadata source override %r for %s; using IGDB",
+            source,
+            title,
+        )
+        return "igdb"
+    return source
+
+
 def is_confusing_match(gp_title: str, igdb_name: str) -> bool:
     """Reject sequels/editions that GamerPower title didn't mention."""
     gp_norm = normalize_title(gp_title)
@@ -265,13 +287,14 @@ def merge_game_data(gp_game: dict, igdb_data: dict) -> dict:
     return merged
 
 
-def gamerpower_mobile_fallback(gp_game: dict) -> dict:
-    """Keep Epic mobile deals visible when IGDB lacks a safe mobile match."""
+def gamerpower_fallback(gp_game: dict) -> dict:
+    """Build a complete app record from GamerPower when IGDB is unavailable."""
     fallback_id = -abs(int(gp_game["gamerpower_id"]))
     return {
         **gp_game,
         "id": fallback_id,
         "name": gp_game["title"],
+        "metadata_source": "gamerpower",
         "cover_url": gp_game.get("cover_url") or "",
         "first_release_date": 0,
         "game_engines": [],
@@ -367,6 +390,9 @@ def fetch_gamerpower_games() -> list[dict] | None:
                 "open_giveaway_url": (
                     offer.get("open_giveaway_url") or offer.get("open_giveaway")
                 ),
+                # Preserve the full API response for safe fallback rendering
+                # and future fields GamerPower may add.
+                "gamerpower_data": offer,
             })
         return games
 
@@ -684,36 +710,52 @@ def main() -> None:
     for gp_game in gp_games:
         gp_id = gp_game["gamerpower_id"]
         is_new = gp_id in added_ids
+        existing = firestore_map.get(gp_id)
+        metadata_source = metadata_source_for(gp_game["title"])
 
-        # Enrich when new, or when existing entry is missing IGDB data.
-        should_enrich = is_new or not (
-            firestore_map.get(gp_id, {}).get("id")
-            and firestore_map.get(gp_id, {}).get("name")
+        # GamerPower overrides are rebuilt every run so changing the source
+        # flag immediately replaces any previously stored wrong IGDB record.
+        should_enrich = metadata_source == "gamerpower" or is_new or not (
+            (existing or {}).get("id") and (existing or {}).get("name")
         )
 
         if should_enrich:
             logger.info("🔎 Enriching: %s", gp_game["title"])
+            if metadata_source == "gamerpower":
+                final = gamerpower_fallback(gp_game)
+                final["reminder_sent"] = (existing or {}).get(
+                    "reminder_sent", False
+                )
+                enriched_games.append(final)
+                if is_new:
+                    newly_added_games.append(final)
+                logger.info(
+                    "Using GamerPower metadata override for: %s",
+                    gp_game["title"],
+                )
+                continue
+
             igdb_data = fetch_igdb_data(
                 gp_game["title"], normalize_title(gp_game["title"]), gp_game
             )
 
             if not igdb_data:
-                if gp_game.get("store") == "Epic Games Mobile":
-                    enriched_games.append(gamerpower_mobile_fallback(gp_game))
-                    if is_new:
-                        newly_added_games.append(enriched_games[-1])
-                    logger.info(
-                        "Keeping Epic Games Mobile deal with GamerPower metadata: %s",
-                        gp_game["title"],
-                    )
-                    continue
-                logger.warning("⚠️  Skipped %s (no IGDB match)", gp_game["title"])
+                final = gamerpower_fallback(gp_game)
+                final["reminder_sent"] = (existing or {}).get(
+                    "reminder_sent", False
+                )
+                enriched_games.append(final)
+                if is_new:
+                    newly_added_games.append(final)
+                logger.warning(
+                    "Using GamerPower fallback for %s (no safe IGDB match)",
+                    gp_game["title"],
+                )
                 continue
 
             merged = merge_game_data(gp_game, igdb_data)
 
-            if gp_id in firestore_map:
-                existing = firestore_map[gp_id]
+            if existing:
                 final: dict = {}
                 for key, value in merged.items():
                     if key in ("expiry_date", "worth", "store", "open_giveaway_url"):
