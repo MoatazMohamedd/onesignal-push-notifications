@@ -86,6 +86,12 @@ _EDITION_KEYWORDS = {
 # records.  A giveaway should use the canonical main-game record, not a mod
 # which happens to share the same title and platforms.
 IGDB_MAIN_GAME_CATEGORY = 0
+IGDB_MATCH_VERSION = 2
+_IGDB_MOD_METADATA_RE = re.compile(
+    r"\b(?:mod(?:ification)?|doom\s*(?:ii|2)|wad|level\s+(?:pack|episode)|"
+    r"total\s+conversion)\b",
+    re.IGNORECASE,
+)
 
 
 def normalize_title(title: str) -> str:
@@ -110,6 +116,21 @@ def is_confusing_match(gp_title: str, igdb_name: str) -> bool:
         return True
 
     return any(kw in igdb_norm and kw not in gp_norm for kw in _EDITION_KEYWORDS)
+
+
+def is_mod_metadata(raw: dict) -> bool:
+    """Reject IGDB records miscategorised as games but described as mods."""
+    keyword_names = [
+        str(keyword.get("name", ""))
+        for keyword in raw.get("keywords", [])
+        if isinstance(keyword, dict)
+    ]
+    metadata = " ".join([
+        str(raw.get("summary", "")),
+        str(raw.get("storyline", "")),
+        *keyword_names,
+    ])
+    return bool(_IGDB_MOD_METADATA_RE.search(metadata))
 
 
 # ---------------------------------------------------------------------------
@@ -277,6 +298,7 @@ def gamerpower_mobile_fallback(gp_game: dict) -> dict:
         **gp_game,
         "id": fallback_id,
         "igdb_category": None,
+        "igdb_match_version": IGDB_MATCH_VERSION,
         "name": gp_game["title"],
         "cover_url": gp_game.get("cover_url") or "",
         "first_release_date": 0,
@@ -399,7 +421,7 @@ def fetch_igdb_data(
     search "{title}";
     where category = {IGDB_MAIN_GAME_CATEGORY};
     fields id, name, category, cover.url, total_rating, storyline, first_release_date,
-           summary, genres.name, player_perspectives.name, game_engines.name,
+           summary, keywords.name, genres.name, player_perspectives.name, game_engines.name,
            game_modes.name, screenshots.url, websites.url, platforms;
     limit 25;
     """
@@ -415,6 +437,9 @@ def fetch_igdb_data(
         for result in resp.json() or []:
             candidate = result.get("name", "") or ""
             if result.get("category") != IGDB_MAIN_GAME_CATEGORY:
+                continue
+            if is_mod_metadata(result):
+                append_skipped(gp_game, f"Mod metadata match: {candidate}")
                 continue
             if normalize_title(candidate) != normalized_target:
                 continue
@@ -459,6 +484,7 @@ def _transform_igdb(raw: dict) -> dict:
     transformed: dict = {
         "id": raw.get("id"),
         "igdb_category": raw.get("category"),
+        "igdb_match_version": IGDB_MATCH_VERSION,
         "name": raw.get("name"),
         "summary": raw.get("summary"),
         "storyline": raw.get("storyline"),
@@ -697,7 +723,9 @@ def main() -> None:
         existing = firestore_map.get(gp_id)
         # Existing records from before category filtering may contain an IGDB
         # mod. Refresh them once so they receive canonical main-game metadata.
-        needs_category_repair = bool(existing) and "igdb_category" not in existing
+        needs_category_repair = bool(existing) and (
+            existing.get("igdb_match_version") != IGDB_MATCH_VERSION
+        )
 
         # Enrich when new, when legacy metadata needs repairing, or when an
         # existing entry is missing IGDB data.
