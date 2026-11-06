@@ -82,11 +82,6 @@ _EDITION_KEYWORDS = {
     "director", "redux", "reloaded", "remake",
 }
 
-# IGDB's `games` endpoint also returns mods, DLC, ports, and other game-like
-# records.  A giveaway should use the canonical main-game record, not a mod
-# which happens to share the same title and platforms.
-IGDB_MAIN_GAME_CATEGORY = 0
-
 
 def normalize_title(title: str) -> str:
     """Normalize game titles for strict equality checks."""
@@ -276,7 +271,6 @@ def gamerpower_mobile_fallback(gp_game: dict) -> dict:
     return {
         **gp_game,
         "id": fallback_id,
-        "igdb_category": None,
         "name": gp_game["title"],
         "cover_url": gp_game.get("cover_url") or "",
         "first_release_date": 0,
@@ -397,8 +391,7 @@ def fetch_igdb_data(
     }
     body = f"""
     search "{title}";
-    where category = {IGDB_MAIN_GAME_CATEGORY};
-    fields id, name, category, cover.url, total_rating, storyline, first_release_date,
+    fields id, name, cover.url, total_rating, storyline, first_release_date,
            summary, genres.name, player_perspectives.name, game_engines.name,
            game_modes.name, screenshots.url, websites.url, platforms;
     limit 25;
@@ -414,8 +407,6 @@ def fetch_igdb_data(
 
         for result in resp.json() or []:
             candidate = result.get("name", "") or ""
-            if result.get("category") != IGDB_MAIN_GAME_CATEGORY:
-                continue
             if normalize_title(candidate) != normalized_target:
                 continue
             if is_confusing_match(title, candidate):
@@ -458,7 +449,6 @@ def _transform_igdb(raw: dict) -> dict:
 
     transformed: dict = {
         "id": raw.get("id"),
-        "igdb_category": raw.get("category"),
         "name": raw.get("name"),
         "summary": raw.get("summary"),
         "storyline": raw.get("storyline"),
@@ -694,15 +684,11 @@ def main() -> None:
     for gp_game in gp_games:
         gp_id = gp_game["gamerpower_id"]
         is_new = gp_id in added_ids
-        existing = firestore_map.get(gp_id)
-        # Existing records from before category filtering may contain an IGDB
-        # mod. Refresh them once so they receive canonical main-game metadata.
-        needs_category_repair = bool(existing) and "igdb_category" not in existing
 
-        # Enrich when new, when legacy metadata needs repairing, or when an
-        # existing entry is missing IGDB data.
-        should_enrich = is_new or needs_category_repair or not (
-            (existing or {}).get("id") and (existing or {}).get("name")
+        # Enrich when new, or when existing entry is missing IGDB data.
+        should_enrich = is_new or not (
+            firestore_map.get(gp_id, {}).get("id")
+            and firestore_map.get(gp_id, {}).get("name")
         )
 
         if should_enrich:
@@ -712,18 +698,6 @@ def main() -> None:
             )
 
             if not igdb_data:
-                # A repair must not make an otherwise valid active giveaway
-                # disappear if IGDB is temporarily unavailable.
-                if existing:
-                    enriched_games.append({
-                        **existing,
-                        **{
-                            k: gp_game[k]
-                            for k in ("expiry_date", "worth", "store", "open_giveaway_url")
-                            if k in gp_game
-                        },
-                    })
-                    continue
                 if gp_game.get("store") == "Epic Games Mobile":
                     enriched_games.append(gamerpower_mobile_fallback(gp_game))
                     if is_new:
@@ -738,15 +712,8 @@ def main() -> None:
 
             merged = merge_game_data(gp_game, igdb_data)
 
-            if existing:
-                if needs_category_repair:
-                    # Fresh metadata must replace the legacy record; otherwise
-                    # the old mod ID and artwork would be retained.
-                    final = {**existing, **merged}
-                    final["reminder_sent"] = existing.get("reminder_sent", False)
-                    enriched_games.append(final)
-                    continue
-
+            if gp_id in firestore_map:
+                existing = firestore_map[gp_id]
                 final: dict = {}
                 for key, value in merged.items():
                     if key in ("expiry_date", "worth", "store", "open_giveaway_url"):
