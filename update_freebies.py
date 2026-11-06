@@ -86,13 +86,7 @@ _EDITION_KEYWORDS = {
 # records.  A giveaway should use the canonical main-game record, not a mod
 # which happens to share the same title and platforms.
 IGDB_MAIN_GAME_CATEGORY = 0
-IGDB_MATCH_VERSION = 3
-# IGDB has two PC, main-game-category records named "Flotsam". One is Doom II
-# content incorrectly classified as a game; the Epic giveaway is the Pajama
-# Llama city builder, whose canonical IGDB record is 74527.
-IGDB_EXACT_MATCH_OVERRIDES = {
-    "flotsam": 74527,
-}
+IGDB_MATCH_VERSION = 2
 _IGDB_MOD_METADATA_RE = re.compile(
     r"\b(?:mod(?:ification)?|doom\s*(?:ii|2)|wad|level\s+(?:pack|episode)|"
     r"total\s+conversion)\b",
@@ -423,15 +417,9 @@ def fetch_igdb_data(
         "Client-ID": IGDB_CLIENT_ID,
         "Authorization": f"Bearer {IGDB_ACCESS_TOKEN}",
     }
-    exact_id = IGDB_EXACT_MATCH_OVERRIDES.get(normalized_target)
-    selector = (
-        f"where id = {exact_id};"
-        if exact_id is not None
-        else f"""search "{title}";
-    where category = {IGDB_MAIN_GAME_CATEGORY};"""
-    )
     body = f"""
-    {selector}
+    search "{title}";
+    where category = {IGDB_MAIN_GAME_CATEGORY};
     fields id, name, category, cover.url, total_rating, storyline, first_release_date,
            summary, keywords.name, genres.name, player_perspectives.name, game_engines.name,
            game_modes.name, screenshots.url, websites.url, platforms;
