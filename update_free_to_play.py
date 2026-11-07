@@ -106,10 +106,10 @@ def _normalize_game(raw: object) -> dict[str, Any] | None:
 
     if isinstance(game_id, bool) or not isinstance(game_id, int):
         return None
-        if not all(
-            isinstance(value, str) and value.strip()
-            for value in (title, genre, platform)
-        ):
+    if not all(
+        isinstance(value, str) and value.strip()
+        for value in (title, genre, platform)
+    ):
         return None
     if "windows" not in platform.casefold():
         return None
