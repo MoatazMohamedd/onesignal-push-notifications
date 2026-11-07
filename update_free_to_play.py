@@ -5,8 +5,11 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
+import string
 import time
 from datetime import date, datetime, timezone
+import unicodedata
 from typing import Any
 from urllib.parse import urlparse
 
@@ -25,18 +28,22 @@ API_URL = "https://www.freetogame.com/api/games"
 SOURCE_URL = "https://www.freetogame.com/"
 COLLECTION = "free_to_play_games"
 DOCUMENT = "current"
-ALGORITHM_VERSION = 1
+ALGORITHM_VERSION = 2
 
 POPULAR_LIMIT = 12
 POPULAR_GENRE_LIMIT = 3
 NEW_RELEASE_LIMIT = 8
 NEW_RELEASE_GENRE_LIMIT = 2
-NEW_RELEASE_WINDOW_DAYS = 730
+NEW_RELEASE_WINDOW_DAYS = 365
 NEW_RELEASE_POPULARITY_CEILING = 180
 MIN_POPULAR_PICKS = 6
+IGDB_API_URL = "https://api.igdb.com/v4/games"
+IGDB_PC_PLATFORMS = {"3", "6", "14"}
 
 FIREBASE_CREDENTIALS_JSON = os.getenv("FIREBASE_CREDENTIALS_JSON")
 FIRESTORE_PROJECT_ID = os.getenv("FIRESTORE_PROJECT_ID")
+IGDB_CLIENT_ID = os.getenv("IGDB_CLIENT_ID")
+IGDB_ACCESS_TOKEN = os.getenv("IGDB_ACCESS_TOKEN")
 
 
 def _valid_url(value: object) -> bool:
@@ -99,17 +106,20 @@ def _normalize_game(raw: object) -> dict[str, Any] | None:
 
     if isinstance(game_id, bool) or not isinstance(game_id, int):
         return None
-    if not all(isinstance(value, str) and value.strip() for value in (title, genre, platform)):
+        if not all(
+            isinstance(value, str) and value.strip()
+            for value in (title, genre, platform)
+        ):
         return None
     if "windows" not in platform.casefold():
         return None
     if release_date is None or release_date > date.today():
         return None
-    if not _valid_url(thumbnail) or not _valid_url(game_url) or not _valid_url(profile_url):
+    if not all(_valid_url(url) for url in (thumbnail, game_url, profile_url)):
         return None
 
     return {
-        "id": game_id,
+        "freeToGameId": game_id,
         "title": title.strip(),
         "thumbnail": thumbnail.strip(),
         "shortDescription": str(raw.get("short_description") or "").strip()[:500],
@@ -132,7 +142,7 @@ def _dedupe_ranked(
         game = _normalize_game(raw)
         if game is None:
             continue
-        game_id = game["id"]
+        game_id = game["freeToGameId"]
         if game_id not in games:
             games[game_id] = game
             order.append(game_id)
@@ -156,7 +166,7 @@ def _choose_diverse(
         if genre_counts.get(genre, 0) >= per_genre:
             continue
         selected.append(game)
-        selected_ids.add(game["id"])
+        selected_ids.add(game["freeToGameId"])
         genre_counts[genre] = genre_counts.get(genre, 0) + 1
         if len(selected) >= limit:
             break
@@ -164,7 +174,7 @@ def _choose_diverse(
     # Preserve useful coverage when a narrow feed has too few distinct genres.
     if len(selected) < limit:
         for game in candidates:
-            if game["id"] in selected_ids:
+            if game["freeToGameId"] in selected_ids:
                 continue
             selected.append(game)
             if len(selected) >= limit:
@@ -194,7 +204,11 @@ def curate_games(
             f"Only {len(popular_games)} valid games were returned; preserving existing Firestore data"
         )
 
-    popularity_candidates = [popular_games[game_id] for game_id in popular_order if game_id in popular_games]
+    popularity_candidates = [
+        popular_games[game_id]
+        for game_id in popular_order
+        if game_id in popular_games
+    ]
     popular_picks = _choose_diverse(
         popularity_candidates, POPULAR_LIMIT, POPULAR_GENRE_LIMIT
     )
@@ -232,30 +246,166 @@ def curate_games(
 
     labels: dict[int, set[str]] = {}
     for game in popular_picks:
-        labels.setdefault(game["id"], set()).add("popular")
+        labels.setdefault(game["freeToGameId"], set()).add("popular")
     for game in new_release_picks:
-        labels.setdefault(game["id"], set()).add("new_release")
+        labels.setdefault(game["freeToGameId"], set()).add("new_release")
 
-    selected_ids = [game["id"] for game in popular_picks]
+    selected_ids = [game["freeToGameId"] for game in popular_picks]
     selected_ids.extend(
-        game["id"] for game in new_release_picks if game["id"] not in labels or "popular" not in labels[game["id"]]
+        game["freeToGameId"]
+        for game in new_release_picks
+        if "popular" not in labels[game["freeToGameId"]]
     )
 
     curated: list[dict[str, Any]] = []
     for game_id in selected_ids:
-        game = popular_games[game_id]
-        curated.append(
-            {
-                key: value
-                for key, value in {
-                    **game,
-                    "editorialLabels": sorted(labels[game_id]),
-                }.items()
-                if value is not None
-            }
-        )
+        source_game = popular_games[game_id]
+        igdb_game = fetch_igdb_game(source_game["title"])
+        curated.append(_build_app_game(source_game, igdb_game, labels[game_id]))
 
     return curated
+
+
+def _normalize_title(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", value)
+    normalized = "".join(
+        char for char in normalized if not unicodedata.combining(char)
+    )
+    normalized = normalized.casefold().replace("&", " and ")
+    normalized = re.sub(r"[™®©]", "", normalized)
+    normalized = re.sub(
+        rf"[{re.escape(string.punctuation)}]", " ", normalized
+    )
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def _igdb_image(url: str, size: str) -> str:
+    secure_url = url if url.startswith("http") else f"https:{url}"
+    return secure_url.replace("t_thumb", size)
+
+
+def fetch_igdb_game(title: str) -> dict[str, Any]:
+    """Return a strict title/platform match, or an empty fallback signal."""
+    if not IGDB_CLIENT_ID or not IGDB_ACCESS_TOKEN:
+        logger.warning(
+            "IGDB credentials missing; using FreeToGame metadata for %s", title
+        )
+        return {}
+
+    time.sleep(0.25)
+    escaped_title = title.replace("\\", "\\\\").replace('"', '\\"')
+    query = f"""
+        search "{escaped_title}";
+        fields id, name, cover.url, total_rating, storyline, first_release_date,
+               summary, genres.name, player_perspectives.name, game_engines.name,
+               game_modes.name, screenshots.url, websites.url, platforms;
+        limit 25;
+    """
+    try:
+        response = requests.post(
+            IGDB_API_URL,
+            headers={
+                "Client-ID": IGDB_CLIENT_ID,
+                "Authorization": f"Bearer {IGDB_ACCESS_TOKEN}",
+            },
+            data=query.strip(),
+            timeout=(10, 30),
+        )
+        response.raise_for_status()
+        candidates = response.json()
+        if not isinstance(candidates, list):
+            raise ValueError("IGDB response was not a JSON list")
+
+        target = _normalize_title(title)
+        for candidate in candidates:
+            candidate_name = candidate.get("name")
+            if not isinstance(candidate_name, str) or not isinstance(
+                candidate.get("id"), int
+            ):
+                continue
+            if _normalize_title(candidate_name) != target:
+                continue
+            platforms = {
+                str(platform) for platform in (candidate.get("platforms") or [])
+            }
+            if not platforms.intersection(IGDB_PC_PLATFORMS):
+                continue
+            return _transform_igdb_game(candidate)
+    except (requests.RequestException, ValueError) as exc:
+        logger.warning("IGDB lookup failed for %s: %s", title, exc)
+
+    logger.info("No strict IGDB PC match for %s; using source fallback", title)
+    return {}
+
+
+def _transform_igdb_game(raw: dict[str, Any]) -> dict[str, Any]:
+    def names(field: str) -> list[str]:
+        return [
+            item["name"]
+            for item in (raw.get(field) or [])
+            if isinstance(item, dict) and item.get("name")
+        ]
+
+    screenshots = [
+        _igdb_image(item["url"], "t_screenshot_med")
+        for item in (raw.get("screenshots") or [])
+        if isinstance(item, dict) and item.get("url")
+    ]
+    websites = [
+        item["url"]
+        for item in (raw.get("websites") or [])
+        if isinstance(item, dict) and item.get("url")
+    ]
+    cover = (raw.get("cover") or {}).get("url")
+    return {
+        "id": raw.get("id"),
+        "name": raw.get("name"),
+        "cover_url": _igdb_image(cover, "t_cover_big") if cover else None,
+        "first_release_date": raw.get("first_release_date"),
+        "game_engines": names("game_engines"),
+        "game_modes": names("game_modes"),
+        "genres": names("genres"),
+        "websites": websites,
+        "player_perspectives": names("player_perspectives"),
+        "screenshots": screenshots,
+        "storyline": raw.get("storyline") or "",
+        "summary": raw.get("summary") or "",
+        "total_rating": raw.get("total_rating") or 0,
+    }
+
+
+def _build_app_game(
+    source: dict[str, Any], igdb: dict[str, Any], labels: set[str]
+) -> dict[str, Any]:
+    release = _release_date(source.get("releaseDate"))
+    release_timestamp = (
+        int(datetime.combine(release, datetime.min.time(), timezone.utc).timestamp())
+        if release
+        else 0
+    )
+    free_to_game_id = source["freeToGameId"]
+    return {
+        **source,
+        **igdb,
+        "id": igdb.get("id") or -free_to_game_id,
+        "freeToGameId": free_to_game_id,
+        "name": igdb.get("name") or source["title"],
+        "cover_url": igdb.get("cover_url") or source["thumbnail"],
+        "first_release_date": igdb.get("first_release_date") or release_timestamp,
+        "game_engines": igdb.get("game_engines") or [],
+        "game_modes": igdb.get("game_modes") or [],
+        "genres": igdb.get("genres") or [source["genre"]],
+        "websites": igdb.get("websites") or [source["gameUrl"]],
+        "player_perspectives": igdb.get("player_perspectives") or [],
+        "screenshots": igdb.get("screenshots") or [],
+        "storyline": igdb.get("storyline") or "",
+        "summary": igdb.get("summary") or source["shortDescription"],
+        "total_rating": igdb.get("total_rating") or 0,
+        "gamerpower_id": 0,
+        "freeToGameUrl": source["gameUrl"],
+        "editorialLabels": sorted(labels),
+        "metadataSource": "IGDB" if igdb else "FreeToGame",
+    }
 
 
 def main() -> None:
@@ -277,6 +427,7 @@ def main() -> None:
     games = curate_games(popularity_payload, release_payload)
     popular_count = sum("popular" in game["editorialLabels"] for game in games)
     new_count = sum("new_release" in game["editorialLabels"] for game in games)
+    igdb_count = sum(game["metadataSource"] == "IGDB" for game in games)
 
     document = firestore.Client(project=project_id, credentials=credentials)
     document.collection(COLLECTION).document(DOCUMENT).set(
@@ -292,10 +443,11 @@ def main() -> None:
         }
     )
     logger.info(
-        "Saved %d curated Windows F2P games (%d popular, %d recent) to %s/%s",
+        "Saved %d curated Windows F2P games (%d popular, %d recent, %d IGDB-enriched) to %s/%s",
         len(games),
         popular_count,
         new_count,
+        igdb_count,
         COLLECTION,
         DOCUMENT,
     )
