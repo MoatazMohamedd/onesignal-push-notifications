@@ -1,0 +1,37 @@
+name: Update exchange rates
+
+on:
+  schedule:
+    - cron: "15 16 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: update-exchange-rates
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - run: pip install -r requirements.txt
+
+      - name: Fetch and store rates
+        env:
+          FIREBASE_CREDENTIALS_JSON: ${{ secrets.FIREBASE_CREDENTIALS_JSON }}
+          FIRESTORE_PROJECT_ID: ${{ secrets.FIRESTORE_PROJECT_ID }}
+        run: |
+          node scripts/fetch_exchange_rates.mjs > "$RUNNER_TEMP/exchange-rates.json"
+          python update_exchange_rates.py "$RUNNER_TEMP/exchange-rates.json"
