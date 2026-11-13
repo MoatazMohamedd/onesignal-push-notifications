@@ -376,15 +376,26 @@ def fetch_freetokeep_upcoming() -> list[dict] | None:
             seen_offer_keys.add(offer_key)
             price = offer.get("originalPrice")
             worth_match = re.search(r"\d+(?:\.\d+)?", price or "")
-            games.append({
-                "id": offer_id,
+            source_game = {
+                "gamerpower_id": freetokeep_id(offer_id),
+                "source": "freetokeep",
+                "source_id": offer_id,
                 "title": title.strip(),
                 "cover_url": offer.get("imageUrl") if isinstance(offer.get("imageUrl"), str) else "",
+                "summary": "",
+                "worth": worth_match.group() if worth_match else "0.00",
                 "store": store,
-                "starts_at": starts_at,
                 "expiry_date": offer.get("endsAt") if isinstance(offer.get("endsAt"), str) else "",
                 "open_giveaway_url": offer.get("url") if isinstance(offer.get("url"), str) else "",
-                "worth": worth_match.group() if worth_match else "0.00",
+                "freetokeep_data": offer,
+            }
+            igdb_data = fetch_igdb_data(
+                source_game["title"], normalize_title(source_game["title"]), source_game
+            )
+            game = merge_game_data(source_game, igdb_data) if igdb_data else source_fallback(source_game)
+            games.append({
+                **game,
+                "starts_at": starts_at,
             })
         assert all(not is_prime_gaming_offer(game) for game in games)
         return games
