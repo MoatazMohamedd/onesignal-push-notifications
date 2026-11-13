@@ -274,6 +274,9 @@ def normalize_store_name(store: str) -> str:
         "epicgames": "Epic Games Store",
         "epicgamesstore": "Epic Games Store",
         "epicgamesmobile": "Epic Games Mobile",
+        "epicpc": "Epic Games Store",
+        "epicios": "Epic Games Mobile",
+        "epicandroid": "Epic Games Mobile",
         "epic": "Epic Games Store",
         "prime": "Prime Gaming",
         "primegaming": "Prime Gaming",
@@ -295,10 +298,8 @@ def is_prime_gaming_offer(offer: dict) -> bool:
 
 
 def deal_key(game: dict) -> tuple[str, str]:
-    """Identify one storefront offer across providers, ignoring platform variants."""
+    """Identify one storefront offer across providers."""
     store = normalize_store_name(game.get("store", "")).lower()
-    if store.startswith("epic games"):
-        store = "epic"
     return normalize_title(game.get("title") or game.get("name") or ""), store
 
 
@@ -453,6 +454,7 @@ def fetch_freetokeep_games() -> list[dict] | None:
             raise ValueError("FreeToKeep returned an invalid offers response")
 
         games: list[dict] = []
+        seen_offer_keys: set[tuple[str, str]] = set()
         for offer in items:
             if not isinstance(offer, dict):
                 continue
@@ -471,6 +473,12 @@ def fetch_freetokeep_games() -> list[dict] | None:
             store = offer.get("storeLabel") or offer.get("store") or "Unknown"
             if not isinstance(store, str):
                 store = "Unknown"
+            store = normalize_store_name(store)
+            offer_key = (normalize_title(title), store.lower())
+            if offer_key in seen_offer_keys:
+                logger.info("Skipping duplicate FreeToKeep offer: %s (%s)", title, store)
+                continue
+            seen_offer_keys.add(offer_key)
             price = offer.get("originalPrice")
             worth_match = re.search(r"\d+(?:\.\d+)?", price or "")
             games.append({
@@ -482,7 +490,7 @@ def fetch_freetokeep_games() -> list[dict] | None:
                 "summary": "",
                 "worth": worth_match.group() if worth_match else "0.00",
                 "worth_currency": (price.rsplit(" ", 1)[-1] if isinstance(price, str) and " " in price else ""),
-                "store": normalize_store_name(store),
+                "store": store,
                 "expiry_date": expiry_date,
                 "open_giveaway_url": offer.get("url") if isinstance(offer.get("url"), str) else "",
                 "freetokeep_data": offer,
