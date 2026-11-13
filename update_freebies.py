@@ -315,6 +315,8 @@ def freetokeep_id(offer_id: str) -> int:
 def merge_game_data(gp_game: dict, igdb_data: dict) -> dict:
     merged = {**gp_game, **igdb_data}
     merged["open_giveaway_url"] = gp_game.get("open_giveaway_url")
+    if gp_game.get("source") == "freetokeep" and gp_game.get("cover_url"):
+        merged["cover_url"] = gp_game["cover_url"]
     return merged
 
 
@@ -904,7 +906,10 @@ def main() -> None:
             if existing:
                 final: dict = {}
                 for key, value in merged.items():
-                    if key in ("expiry_date", "worth", "store", "open_giveaway_url"):
+                    if key in ("expiry_date", "worth", "store", "open_giveaway_url") or (
+                        gp_game.get("source") == "freetokeep"
+                        and key in ("cover_url", "source", "source_id", "freetokeep_data", "worth_currency")
+                    ):
                         final[key] = value
                     elif existing.get(key) not in (None, "", [], {}):
                         final[key] = existing[key]
@@ -912,6 +917,8 @@ def main() -> None:
                         final[key] = value
 
                 final["reminder_sent"] = existing.get("reminder_sent", False)
+                if gp_game.get("source") == "freetokeep":
+                    final.pop("gamerpower_data", None)
                 enriched_games.append(final)
             else:
                 merged["reminder_sent"] = False
@@ -930,6 +937,13 @@ def main() -> None:
                     if k in gp_game
                 },
             }
+            if gp_game.get("source") == "freetokeep":
+                refreshed.update({
+                    key: gp_game[key]
+                    for key in ("cover_url", "source", "source_id", "freetokeep_data", "worth_currency")
+                    if key in gp_game
+                })
+                refreshed.pop("gamerpower_data", None)
             enriched_games.append(refreshed)
 
     # Recheck after enrichment because a long IGDB batch can cross an offer's
