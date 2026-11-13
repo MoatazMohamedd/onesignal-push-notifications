@@ -288,9 +288,15 @@ def normalize_store_name(store: str) -> str:
 
 def is_prime_gaming_offer(offer: dict) -> bool:
     """Prime Gaming is temporarily outside the app's free-deal scope."""
+    if offer.get("store") == "prime" or offer.get("provider") == "prime":
+        return True
     fields = (
         offer.get("store"), offer.get("storeLabel"), offer.get("provider"), offer.get("providerLabel"), offer.get("title"),
         offer.get("description"), offer.get("open_giveaway_url"), offer.get("url"),
+    )
+    return any(
+        isinstance(value, str) and "prime gaming" in value.lower()
+        for value in fields
     )
 
 
@@ -352,12 +358,6 @@ def fetch_freetokeep_upcoming() -> list[dict] | None:
     except Exception as exc:
         logger.error("FreeToKeep upcoming fetch failed: %s", exc)
         return None
-    return any(
-        isinstance(value, str) and "prime gaming" in value.lower()
-        for value in fields
-    )
-
-
 def deal_key(game: dict) -> tuple[str, str]:
     """Identify one storefront offer across providers."""
     store = normalize_store_name(game.get("store", "")).lower()
@@ -474,6 +474,9 @@ def fetch_gamerpower_games() -> list[dict] | None:
             clean_title = re.sub(r"\s*\(.*?\)", "", offer["title"])
             clean_title = re.sub(r"\s*Giveaway", "", clean_title).strip()
             worth = offer.get("worth", "$0.00").replace("$", "").strip() or "0.00"
+            store = normalize_store_name(detect_store(offer))
+            if store == "Amazon Games":
+                continue
 
             games.append({
                 "gamerpower_id": offer["id"],
@@ -481,7 +484,7 @@ def fetch_gamerpower_games() -> list[dict] | None:
                 "cover_url": offer.get("thumbnail") or offer.get("image") or "",
                 "summary": offer.get("description") or "",
                 "worth": worth,
-                "store": normalize_store_name(detect_store(offer)),
+                "store": store,
                 "expiry_date": expiry_date,
                 "open_giveaway_url": (
                     offer.get("open_giveaway_url") or offer.get("open_giveaway")
@@ -490,7 +493,10 @@ def fetch_gamerpower_games() -> list[dict] | None:
                 # and future fields GamerPower may add.
                 "gamerpower_data": offer,
             })
-        assert all(not is_prime_gaming_offer(game) for game in games)
+        assert all(
+            not is_prime_gaming_offer(game) and game["store"] != "Amazon Games"
+            for game in games
+        )
         return games
 
     except Exception as exc:
