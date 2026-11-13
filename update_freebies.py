@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 GAMERPOWER_API = "https://www.gamerpower.com/api/filter?type=game"
 FREETOKEEP_API = "https://freetokeep.gg/api/v1/offers?status=current&limit=100"
+FREETOKEEP_HOME = "https://freetokeep.gg/"
 DEAL_SOURCE = os.getenv("DEAL_SOURCE", "aggregate").lower()
 SKIPPED_JSON_FILE = "skipped_games.json"
 
@@ -288,9 +289,69 @@ def normalize_store_name(store: str) -> str:
 def is_prime_gaming_offer(offer: dict) -> bool:
     """Prime Gaming is temporarily outside the app's free-deal scope."""
     fields = (
-        offer.get("store"), offer.get("storeLabel"), offer.get("title"),
+        offer.get("store"), offer.get("storeLabel"), offer.get("provider"), offer.get("providerLabel"), offer.get("title"),
         offer.get("description"), offer.get("open_giveaway_url"), offer.get("url"),
     )
+
+
+def fetch_freetokeep_upcoming() -> list[dict] | None:
+    """Scrape FreeToKeep's embedded upcoming-offer payload without affecting live deals."""
+    try:
+        response = requests.get(
+            FREETOKEEP_HOME,
+            timeout=30,
+            headers={"User-Agent": "GamesOrb/1.0 (upcoming free-game sync)"},
+        )
+        response.raise_for_status()
+        # shortcut: this follows FreeToKeep's Next.js payload, use an API endpoint if one is published.
+        match = re.search(
+            r'\\"upcoming\\":(\[.*?\]),\\"historicalLows\\"',
+            response.text,
+            re.DOTALL,
+        )
+        if not match:
+            raise ValueError("FreeToKeep page has no upcoming-offer payload")
+        items = json.loads(match.group(1).replace(r'\"', '"'))
+        if not isinstance(items, list):
+            raise ValueError("FreeToKeep upcoming offers are invalid")
+
+        games: list[dict] = []
+        seen_offer_keys: set[tuple[str, str]] = set()
+        for offer in items:
+            if not isinstance(offer, dict) or is_prime_gaming_offer(offer):
+                continue
+            offer_id = offer.get("id")
+            title = offer.get("title")
+            starts_at = offer.get("startsAt")
+            if not isinstance(offer_id, str) or not isinstance(title, str) or not isinstance(starts_at, str):
+                continue
+            if not _parse_datetime(starts_at):
+                continue
+            store = offer.get("providerLabel") or offer.get("provider") or "Unknown"
+            if not isinstance(store, str):
+                store = "Unknown"
+            store = normalize_store_name(store)
+            offer_key = (normalize_title(title), store.lower())
+            if offer_key in seen_offer_keys:
+                continue
+            seen_offer_keys.add(offer_key)
+            price = offer.get("originalPrice")
+            worth_match = re.search(r"\d+(?:\.\d+)?", price or "")
+            games.append({
+                "id": offer_id,
+                "title": title.strip(),
+                "cover_url": offer.get("imageUrl") if isinstance(offer.get("imageUrl"), str) else "",
+                "store": store,
+                "starts_at": starts_at,
+                "expiry_date": offer.get("endsAt") if isinstance(offer.get("endsAt"), str) else "",
+                "open_giveaway_url": offer.get("url") if isinstance(offer.get("url"), str) else "",
+                "worth": worth_match.group() if worth_match else "0.00",
+            })
+        assert all(not is_prime_gaming_offer(game) for game in games)
+        return games
+    except Exception as exc:
+        logger.error("FreeToKeep upcoming fetch failed: %s", exc)
+        return None
     return any(
         isinstance(value, str) and "prime gaming" in value.lower()
         for value in fields
@@ -608,6 +669,15 @@ def _transform_igdb(raw: dict) -> dict:
 # Expiry check
 # ---------------------------------------------------------------------------
 
+def _parse_datetime(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed
+
 def is_expiring_today(expiry_date: str) -> bool:
     """Return True if expiry_date falls on today's UTC date."""
     try:
@@ -650,6 +720,19 @@ def get_firestore_games() -> list[dict]:
             raise ValueError("Firestore all_freebies/games has no valid games list")
         return games
     return []
+
+
+def sync_upcoming_games() -> None:
+    """Persist upcoming offers separately so current app versions never read them."""
+    games = fetch_freetokeep_upcoming()
+    if games is None:
+        return
+    firestore_client.collection("upcoming_freebies").document("current").set({
+        "games": games,
+        "generatedAt": datetime.now(timezone.utc),
+        "source": "FreeToKeep.gg",
+    })
+    logger.info("Saved %d upcoming FreeToKeep games", len(games))
 
 
 def _outbox_id(event_id: str, topic: str) -> str:
@@ -762,6 +845,7 @@ def main() -> None:
 
     # Retry any fresh messages left by a previous transient FCM outage.
     drain_notification_outbox()
+    sync_upcoming_games()
 
     logger.info("🎮 Fetching free-to-keep deals...")
     freetokeep_games = (
