@@ -300,6 +300,39 @@ def is_prime_gaming_offer(offer: dict) -> bool:
     )
 
 
+def fetch_freetokeep_store_urls() -> dict[tuple[str, str], str]:
+    """Return direct store links from FreeToKeep's rendered current-offer data."""
+    try:
+        response = requests.get(
+            FREETOKEEP_HOME,
+            timeout=30,
+            headers={"User-Agent": "GamesOrb/1.0 (free-game feed sync)"},
+        )
+        response.raise_for_status()
+        match = re.search(
+            r'\\"offers\\":(\[.*?\]),\\"providers\\"',
+            response.text,
+            re.DOTALL,
+        )
+        if not match:
+            raise ValueError("FreeToKeep page has no current-offer payload")
+        items = json.loads(match.group(1).replace(r'\"', '"'))
+        urls: dict[tuple[str, str], str] = {}
+        for offer in items:
+            if not isinstance(offer, dict) or is_prime_gaming_offer(offer):
+                continue
+            title = offer.get("title")
+            store = offer.get("providerLabel") or offer.get("provider")
+            url = offer.get("url")
+            if not all(isinstance(value, str) for value in (title, store, url)):
+                continue
+            urls[(normalize_title(title), normalize_store_name(store).lower())] = url
+        return urls
+    except Exception as exc:
+        logger.warning("FreeToKeep direct store URLs unavailable: %s", exc)
+        return {}
+
+
 def fetch_freetokeep_upcoming() -> list[dict] | None:
     """Scrape FreeToKeep's embedded upcoming-offer payload without affecting live deals."""
     try:
@@ -522,6 +555,7 @@ def fetch_freetokeep_games() -> list[dict] | None:
         if not isinstance(items, list):
             raise ValueError("FreeToKeep returned an invalid offers response")
 
+        store_urls = fetch_freetokeep_store_urls()
         games: list[dict] = []
         seen_offer_keys: set[tuple[str, str]] = set()
         for offer in items:
@@ -561,7 +595,10 @@ def fetch_freetokeep_games() -> list[dict] | None:
                 "worth_currency": (price.rsplit(" ", 1)[-1] if isinstance(price, str) and " " in price else ""),
                 "store": store,
                 "expiry_date": expiry_date,
-                "open_giveaway_url": offer.get("url") if isinstance(offer.get("url"), str) else "",
+                "open_giveaway_url": store_urls.get(
+                    offer_key,
+                    offer.get("url") if isinstance(offer.get("url"), str) else "",
+                ),
                 "freetokeep_data": offer,
             })
         assert all(not is_prime_gaming_offer(game) for game in games)
