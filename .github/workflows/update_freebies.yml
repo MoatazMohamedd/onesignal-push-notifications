@@ -3,7 +3,17 @@ name: Update Freebies
 on:
   schedule:
     - cron: "37 * * * *" # backup only, off-peak minute
-  workflow_dispatch: # allow manual trigger from Actions UI
+  workflow_dispatch:
+    inputs:
+      deal_source:
+        description: "Offer source: aggregate prefers FreeToKeep and supplements with GamerPower"
+        required: true
+        default: aggregate
+        type: choice
+        options:
+          - aggregate
+          - freetokeep
+          - gamerpower
 
 permissions:
   contents: write
@@ -41,6 +51,7 @@ jobs:
           # Game enrichment APIs (unchanged)
           IGDB_CLIENT_ID: ${{ secrets.IGDB_CLIENT_ID }}
           IGDB_ACCESS_TOKEN: ${{ secrets.IGDB_ACCESS_TOKEN }}
+          DEAL_SOURCE: ${{ inputs.deal_source || 'aggregate' }}
         run: python update_freebies.py
 
       - name: Commit skipped_games.json if changed

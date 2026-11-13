@@ -36,6 +36,8 @@ logger = logging.getLogger(__name__)
 # Environment variables
 # ---------------------------------------------------------------------------
 GAMERPOWER_API = "https://www.gamerpower.com/api/filter?type=game"
+FREETOKEEP_API = "https://freetokeep.gg/api/v1/offers?status=current&limit=100"
+DEAL_SOURCE = os.getenv("DEAL_SOURCE", "aggregate").lower()
 SKIPPED_JSON_FILE = "skipped_games.json"
 
 IGDB_CLIENT_ID = os.getenv("IGDB_CLIENT_ID")
@@ -272,9 +274,37 @@ def normalize_store_name(store: str) -> str:
         "epicgames": "Epic Games Store",
         "epicgamesstore": "Epic Games Store",
         "epicgamesmobile": "Epic Games Mobile",
+        "epic": "Epic Games Store",
+        "prime": "Prime Gaming",
+        "primegaming": "Prime Gaming",
         "indiegala": "IndieGala",
     }
     return canonical.get(key, cleaned)
+
+
+def is_prime_gaming_offer(offer: dict) -> bool:
+    """Prime Gaming is temporarily outside the app's free-deal scope."""
+    fields = (
+        offer.get("store"), offer.get("storeLabel"), offer.get("title"),
+        offer.get("description"), offer.get("open_giveaway_url"), offer.get("url"),
+    )
+    return any(
+        isinstance(value, str) and "prime gaming" in value.lower()
+        for value in fields
+    )
+
+
+def deal_key(game: dict) -> tuple[str, str]:
+    """Identify one storefront offer across providers, ignoring platform variants."""
+    store = normalize_store_name(game.get("store", "")).lower()
+    if store.startswith("epic games"):
+        store = "epic"
+    return normalize_title(game.get("title") or game.get("name") or ""), store
+
+
+def freetokeep_id(offer_id: str) -> int:
+    """Make a stable numeric ID for app versions that require gamerpower_id."""
+    return -(int.from_bytes(hashlib.sha256(offer_id.encode()).digest()[:6], "big") or 1)
 
 
 # ---------------------------------------------------------------------------
@@ -287,15 +317,15 @@ def merge_game_data(gp_game: dict, igdb_data: dict) -> dict:
     return merged
 
 
-def gamerpower_fallback(gp_game: dict) -> dict:
-    """Build a complete app record from GamerPower when IGDB is unavailable."""
-    fallback_id = -abs(int(gp_game["gamerpower_id"]))
+def source_fallback(game: dict) -> dict:
+    """Build a complete app record from the offer when IGDB is unavailable."""
+    fallback_id = -abs(int(game["gamerpower_id"]))
     return {
-        **gp_game,
+        **game,
         "id": fallback_id,
-        "name": gp_game["title"],
-        "metadata_source": "gamerpower",
-        "cover_url": gp_game.get("cover_url") or "",
+        "name": game["title"],
+        "metadata_source": game.get("source", "gamerpower"),
+        "cover_url": game.get("cover_url") or "",
         "first_release_date": 0,
         "game_engines": [],
         "game_modes": [],
@@ -304,7 +334,7 @@ def gamerpower_fallback(gp_game: dict) -> dict:
         "player_perspectives": [],
         "screenshots": [],
         "storyline": "",
-        "summary": gp_game.get("summary") or "",
+        "summary": game.get("summary") or "",
         "total_rating": 0,
     }
 
@@ -340,6 +370,8 @@ def fetch_gamerpower_games() -> list[dict] | None:
 
         for offer in resp.json():
             if "Key Giveaway" in offer.get("title", ""):
+                continue
+            if is_prime_gaming_offer(offer):
                 continue
 
             end_date = offer.get("end_date")
@@ -394,10 +426,71 @@ def fetch_gamerpower_games() -> list[dict] | None:
                 # and future fields GamerPower may add.
                 "gamerpower_data": offer,
             })
+        assert all(not is_prime_gaming_offer(game) for game in games)
         return games
 
     except Exception as exc:
         logger.error("❌ Error fetching GamerPower data: %s", exc)
+        return None
+
+
+# ---------------------------------------------------------------------------
+# FreeToKeep
+# ---------------------------------------------------------------------------
+
+def fetch_freetokeep_games() -> list[dict] | None:
+    """Fetch current FreeToKeep offers in the existing mobile-app shape."""
+    try:
+        response = requests.get(
+            FREETOKEEP_API,
+            timeout=30,
+            headers={"User-Agent": "GamesOrb/1.0 (free-game feed sync)"},
+        )
+        response.raise_for_status()
+        payload = response.json()
+        items = payload.get("items") if isinstance(payload, dict) else None
+        if not isinstance(items, list):
+            raise ValueError("FreeToKeep returned an invalid offers response")
+
+        games: list[dict] = []
+        for offer in items:
+            if not isinstance(offer, dict):
+                continue
+            if is_prime_gaming_offer(offer):
+                continue
+            offer_id = offer.get("id")
+            title = offer.get("title")
+            expiry_date = offer.get("endsAt")
+            if not isinstance(offer_id, str) or not isinstance(title, str):
+                logger.warning("Skipping FreeToKeep offer with no id or title")
+                continue
+            if not isinstance(expiry_date, str) or is_expired(expiry_date):
+                logger.info("Skipping expired or invalid FreeToKeep offer: %s", title)
+                continue
+
+            store = offer.get("storeLabel") or offer.get("store") or "Unknown"
+            if not isinstance(store, str):
+                store = "Unknown"
+            price = offer.get("originalPrice")
+            worth_match = re.search(r"\d+(?:\.\d+)?", price or "")
+            games.append({
+                "gamerpower_id": freetokeep_id(offer_id),
+                "source": "freetokeep",
+                "source_id": offer_id,
+                "title": title.strip(),
+                "cover_url": offer.get("imageUrl") if isinstance(offer.get("imageUrl"), str) else "",
+                "summary": "",
+                "worth": worth_match.group() if worth_match else "0.00",
+                "worth_currency": (price.rsplit(" ", 1)[-1] if isinstance(price, str) and " " in price else ""),
+                "store": normalize_store_name(store),
+                "expiry_date": expiry_date,
+                "open_giveaway_url": offer.get("url") if isinstance(offer.get("url"), str) else "",
+                "freetokeep_data": offer,
+            })
+        assert all(not is_prime_gaming_offer(game) for game in games)
+        return games
+    except Exception as exc:
+        logger.error("FreeToKeep fetch failed: %s", exc)
         return None
 
 
@@ -654,16 +747,34 @@ def _expiry_event(games: list[dict], now: datetime) -> dict | None:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    if DEAL_SOURCE not in {"aggregate", "freetokeep", "gamerpower"}:
+        raise ValueError("DEAL_SOURCE must be aggregate, freetokeep, or gamerpower")
+
     # Retry any fresh messages left by a previous transient FCM outage.
     drain_notification_outbox()
 
-    logger.info("🎮 Fetching GamerPower freebies...")
-    gp_games = fetch_gamerpower_games()
+    logger.info("🎮 Fetching free-to-keep deals...")
+    freetokeep_games = (
+        fetch_freetokeep_games()
+        if DEAL_SOURCE in {"aggregate", "freetokeep"}
+        else []
+    )
+    gp_games = (
+        fetch_gamerpower_games()
+        if DEAL_SOURCE in {"aggregate", "gamerpower"}
+        else []
+    )
 
-    if gp_games is None:
-        logger.warning(
-            "⚠️  GamerPower fetch failed; preserving active feed entries."
+    if (
+        (DEAL_SOURCE == "freetokeep" and freetokeep_games is None)
+        or (DEAL_SOURCE == "gamerpower" and gp_games is None)
+        or (
+            DEAL_SOURCE == "aggregate"
+            and freetokeep_games is None
+            and gp_games is None
         )
+    ):
+        logger.warning("⚠️  Both deal sources failed; preserving active feed entries.")
         stored_games = get_firestore_games()
         active_games = [
             game
@@ -680,13 +791,40 @@ def main() -> None:
             )
         return
 
-    if not gp_games:
-        logger.info("No eligible GamerPower deals with a known expiry date were found.")
+    if not freetokeep_games and not gp_games:
+        logger.info("No eligible free-to-keep deals with a known expiry date were found.")
 
-    logger.info("📥 Found %d games from GamerPower", len(gp_games))
+    logger.info(
+        "📥 Found %d GamerPower backup games before FreeToKeep aggregation",
+        len(gp_games),
+    )
 
     logger.info("🔍 Fetching games from Firestore...")
     firestore_games = get_firestore_games()
+
+    freetokeep_games = freetokeep_games or []
+    gp_games = gp_games or []
+    freetokeep_keys = {deal_key(game) for game in freetokeep_games}
+    supplemental_games = [
+        game for game in gp_games if deal_key(game) not in freetokeep_keys
+    ]
+    existing_by_key = {
+        deal_key(game): game for game in firestore_games if deal_key(game)[0]
+    }
+    retained_ids: set[int] = set()
+    for game in freetokeep_games:
+        if existing := existing_by_key.get(deal_key(game)):
+            # Keep historic IDs so old-app claims and favorites stay attached.
+            existing_id = existing.get("gamerpower_id")
+            if isinstance(existing_id, int) and existing_id not in retained_ids:
+                game["gamerpower_id"] = existing_id
+                retained_ids.add(existing_id)
+    gp_games = freetokeep_games + supplemental_games
+    assert len({game["gamerpower_id"] for game in gp_games}) == len(gp_games)
+    logger.info(
+        "Using %d FreeToKeep and %d supplemental GamerPower games",
+        len(freetokeep_games), len(supplemental_games),
+    )
 
     firestore_ids = {g["gamerpower_id"] for g in firestore_games}
     gp_ids = {g["gamerpower_id"] for g in gp_games}
@@ -722,7 +860,7 @@ def main() -> None:
         if should_enrich:
             logger.info("🔎 Enriching: %s", gp_game["title"])
             if metadata_source == "gamerpower":
-                final = gamerpower_fallback(gp_game)
+                final = source_fallback(gp_game)
                 final["reminder_sent"] = (existing or {}).get(
                     "reminder_sent", False
                 )
@@ -740,7 +878,7 @@ def main() -> None:
             )
 
             if not igdb_data:
-                final = gamerpower_fallback(gp_game)
+                final = source_fallback(gp_game)
                 final["reminder_sent"] = (existing or {}).get(
                     "reminder_sent", False
                 )
